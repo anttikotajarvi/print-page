@@ -1,6 +1,5 @@
-import assert from "node:assert/strict";
+import { expect, test } from "bun:test";
 import { fileURLToPath } from "node:url";
-import test from "node:test";
 
 import {
   DEFAULT_SETTINGS,
@@ -13,14 +12,14 @@ const fixtures = fileURLToPath(new URL("./fixtures/", import.meta.url));
 test("loadSettings returns defaults when settings.json is absent", async () => {
   const settings = await loadSettings(`${fixtures}/minimal`);
 
-  assert.deepEqual(settings, DEFAULT_SETTINGS);
-  assert.notStrictEqual(settings, DEFAULT_SETTINGS);
+  expect(settings).toEqual(DEFAULT_SETTINGS);
+  expect(settings).not.toBe(DEFAULT_SETTINGS);
 });
 
 test("loadSettings merges and validates configured settings", async () => {
   const settings = await loadSettings(`${fixtures}/configured`);
 
-  assert.deepEqual(settings, {
+  expect(settings).toEqual({
     entryPoint: "dist/index.html",
     injectionMode: "window",
     useCache: false,
@@ -30,30 +29,25 @@ test("loadSettings merges and validates configured settings", async () => {
 });
 
 test("validateSettings rejects unknown properties", () => {
-  assert.throws(
+  expect(
     () => validateSettings({ unexpected: true }),
-    /unknown property "unexpected"/u,
-  );
+  ).toThrow(/unknown property "unexpected"/u);
 });
 
 test("validateSettings rejects invalid values", () => {
-  assert.throws(
+  expect(
     () => validateSettings({ timeout: 0 }),
-    /timeout must be a positive integer/u,
-  );
-  assert.throws(
+  ).toThrow(/timeout must be a positive integer/u);
+  expect(
     () => validateSettings({ injectionMode: "query" }),
-    /injectionMode must be one of mustache, window/u,
-  );
+  ).toThrow(/injectionMode must be one of mustache, window/u);
 });
 
 test("validateSettings rejects entry points outside the printable", () => {
-  assert.throws(
+  expect(
     () => validateSettings({ entryPoint: "../index.html" }),
-    /entryPoint must name a relative path inside the printable directory/u,
-  );
-  assert.throws(
+  ).toThrow(/entryPoint must name a relative path inside the printable directory/u);
+  expect(
     () => validateSettings({ entryPoint: "/tmp/index.html" }),
-    /entryPoint must name a relative path inside the printable directory/u,
-  );
+  ).toThrow(/entryPoint must name a relative path inside the printable directory/u);
 });

@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises";
-import { extname, resolve } from "node:path";
+import { dirname, extname, relative, resolve, sep } from "node:path";
 
 import { PrintPageError } from "./errors.js";
 import { injectEntryHtml } from "./inject.js";
@@ -7,6 +7,12 @@ import { resolveWithinDirectory } from "./paths.js";
 import type { InjectionMode } from "./types.js";
 
 export const VIRTUAL_ORIGIN = "http://print.local";
+
+export interface VirtualOrigin {
+  printableDirectory: string;
+  entryPoint: string;
+  entryUrl: string;
+}
 
 export interface VirtualResourceOptions {
   printableDirectory: string;
@@ -48,14 +54,38 @@ const CONTENT_TYPES: Readonly<Record<string, string>> = {
 };
 
 export function createVirtualEntryUrl(entryPoint: string): string {
-  resolveWithinDirectory(".", entryPoint, "Entry point");
-
-  const encodedPath = entryPoint
-    .split("/")
+  const root = resolve(".");
+  const entryPath = resolveWithinDirectory(root, entryPoint, "Entry point");
+  const normalizedEntryPoint = relative(root, entryPath);
+  const encodedPath = normalizedEntryPoint
+    .split(sep)
     .map((segment) => encodeURIComponent(segment))
     .join("/");
 
   return new URL(encodedPath, `${VIRTUAL_ORIGIN}/`).href;
+}
+
+/**
+ * Preserve the configured entry point below the printable root. This keeps
+ * normal browser-relative URLs working for nested application builds.
+ */
+export function createVirtualOrigin(
+  printableDirectory: string,
+  entryPoint: string,
+): VirtualOrigin {
+  const root = resolve(printableDirectory);
+  const entryPath = resolveWithinDirectory(
+    root,
+    entryPoint,
+    "Entry point",
+  );
+  const normalizedEntryPoint = relative(root, entryPath);
+
+  return {
+    printableDirectory: root,
+    entryPoint: normalizedEntryPoint,
+    entryUrl: createVirtualEntryUrl(normalizedEntryPoint),
+  };
 }
 
 export function resolveVirtualResourcePath(
@@ -94,11 +124,20 @@ export function resolveVirtualResourcePath(
     );
   }
 
+  const root = resolve(printableDirectory);
+  const entryPath = resolveWithinDirectory(root, entryPoint, "Entry point");
   const resourcePath = pathname === "/" ? entryPoint : pathname.slice(1);
+
+  // Vite's default base emits `/assets/...` even if the built index is in a
+  // `dist/` directory. Keep this narrow alias while retaining root-relative
+  // behavior for every other path.
+  const resourceRoot = pathname === "/assets" || pathname.startsWith("/assets/")
+    ? dirname(entryPath)
+    : root;
 
   try {
     return resolveWithinDirectory(
-      printableDirectory,
+      resourceRoot,
       resourcePath,
       "Virtual resource path",
     );

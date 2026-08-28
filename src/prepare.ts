@@ -35,7 +35,7 @@ export async function prepareInput(
       );
     }
   } catch (error) {
-    if (isNodeError(error) && error.code === "ENOENT") {
+    if (isFileSystemError(error) && error.code === "ENOENT") {
       return input;
     }
 
@@ -80,6 +80,10 @@ export async function prepareInput(
   }
 }
 
-function isNodeError(error: unknown): error is NodeJS.ErrnoException {
+interface FileSystemError extends Error {
+  code?: string;
+}
+
+function isFileSystemError(error: unknown): error is FileSystemError {
   return error instanceof Error && "code" in error;
 }

@@ -1,5 +1,5 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 
 import { runCli } from "./cli.js";
 
-process.exitCode = runCli(process.argv.slice(2));
+process.exitCode = await runCli(Bun.argv.slice(2));

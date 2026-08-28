@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en">
+  <body>
+    <main id="printable">Configured printable</main>
+    <script src="../shared.js"></script>
+    <script src="/assets/app.js"></script>
+    <script>
+      if (!window.__CONFIGURED_PARENT_ASSET__ || !window.__CONFIGURED_PRINTABLE__) {
+        throw new Error("Configured assets did not load");
+      }
+
+      document.querySelector("#printable").textContent = window.__PRINT_DATA__.name;
+      window.__PRINT_READY__ = true;
+    </script>
+  </body>
+</html>

@@ -1,8 +1,9 @@
-import assert from "node:assert/strict";
+import { expect, test } from "bun:test";
+import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import test from "node:test";
 
 import {
+  createVirtualOrigin,
   createVirtualEntryUrl,
   loadVirtualResource,
   resolveVirtualResourcePath,
@@ -10,23 +11,31 @@ import {
 
 const fixtures = fileURLToPath(new URL("./fixtures/", import.meta.url));
 const minimal = `${fixtures}/minimal`;
+const configured = `${fixtures}/configured`;
 
-test("createVirtualEntryUrl encodes an entry-point path", () => {
-  assert.equal(
-    createVirtualEntryUrl("folder with spaces/index.html"),
-    "http://print.local/folder%20with%20spaces/index.html",
-  );
+test("createVirtualEntryUrl preserves a nested entry path", () => {
+  expect(
+    createVirtualEntryUrl("folder/index file.html"),
+  ).toBe("http://print.local/folder/index%20file.html");
+});
+
+test("createVirtualOrigin retains the printable root and entry path", () => {
+  expect(
+    createVirtualOrigin(minimal, "nested/index.html"),
+  ).toEqual({
+    printableDirectory: resolve(minimal),
+    entryPoint: "nested/index.html",
+    entryUrl: "http://print.local/nested/index.html",
+  });
 });
 
 test("createVirtualEntryUrl rejects absolute and escaping paths", () => {
-  assert.throws(
+  expect(
     () => createVirtualEntryUrl("//example.com/index.html"),
-    /must be relative/u,
-  );
-  assert.throws(
+  ).toThrow(/must be relative/u);
+  expect(
     () => createVirtualEntryUrl("../index.html"),
-    /must stay inside/u,
-  );
+  ).toThrow(/must stay inside/u);
 });
 
 test("loadVirtualResource renders the Mustache entry point", async () => {
@@ -38,30 +47,61 @@ test("loadVirtualResource renders the Mustache entry point", async () => {
     data: { name: "Ada" },
   });
 
-  assert.equal(resource.contentType, "text/html; charset=utf-8");
-  assert.match(resource.body.toString("utf8"), /Hello, Ada!/u);
+  expect(resource.contentType).toBe("text/html; charset=utf-8");
+  expect(resource.body.toString("utf8")).toMatch(/Hello, Ada!/u);
+});
+
+test("virtual origin serves nested and Vite-absolute assets", async () => {
+  const origin = createVirtualOrigin(configured, "dist/index.html");
+  const parentResource = await loadVirtualResource({
+    printableDirectory: origin.printableDirectory,
+    entryPoint: origin.entryPoint,
+    requestUrl: "http://print.local/shared.js",
+    injectionMode: "window",
+    data: {},
+  });
+  const nestedResource = await loadVirtualResource({
+    printableDirectory: origin.printableDirectory,
+    entryPoint: origin.entryPoint,
+    requestUrl: "http://print.local/dist/assets/app.js",
+    injectionMode: "window",
+    data: {},
+  });
+  const viteResource = await loadVirtualResource({
+    printableDirectory: origin.printableDirectory,
+    entryPoint: origin.entryPoint,
+    requestUrl: "http://print.local/assets/app.js",
+    injectionMode: "window",
+    data: {},
+  });
+
+  expect(parentResource.sourcePath).toBe(resolve(configured, "shared.js"));
+
+  for (const resource of [nestedResource, viteResource]) {
+    expect(resource.sourcePath).toBe(resolve(configured, "dist/assets/app.js"));
+    expect(resource.contentType).toBe("text/javascript; charset=utf-8");
+    expect(resource.body.toString("utf8")).toMatch(/CONFIGURED_PRINTABLE/u);
+  }
 });
 
 test("resolveVirtualResourcePath rejects another origin", () => {
-  assert.throws(
+  expect(
     () =>
       resolveVirtualResourcePath(
         minimal,
         "https://example.com/index.html",
         "index.html",
       ),
-    /outside http:\/\/print\.local/u,
-  );
+  ).toThrow(/outside http:\/\/print\.local/u);
 });
 
 test("resolveVirtualResourcePath rejects encoded traversal", () => {
-  assert.throws(
+  expect(
     () =>
       resolveVirtualResourcePath(
         minimal,
         "http://print.local/..%2Fsecret.txt",
         "index.html",
       ),
-    /escapes the printable directory/u,
-  );
+  ).toThrow(/escapes the printable directory/u);
 });

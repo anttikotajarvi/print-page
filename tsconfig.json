@@ -14,7 +14,7 @@
     "strict": true,
     "target": "ES2023",
     "types": [
-      "node"
+      "bun"
     ],
     "verbatimModuleSyntax": true
   },

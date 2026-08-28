@@ -641,12 +641,6 @@ print-page should not initially own the Svelte build process.
 The template repository can simply do:
 
 ```bash
-npm run build
-```
-
-or:
-
-```bash
 bun run build
 ```
 
@@ -678,12 +672,6 @@ A browser-native printable can often be run directly through its normal developm
 
 ```bash
 bun run dev
-```
-
-or:
-
-```bash
-npm run dev
 ```
 
 and inspected with ordinary browser developer tools.
@@ -1274,15 +1262,15 @@ Those concerns belong to the repositories that need them.
 
 print-page should be implemented as a **TypeScript CLI**.
 
-The implementation should remain compatible with standard Node.js tooling while being **Bun-friendly** for development, package management, and possible standalone binary distribution.
+The implementation should use **Bun** for development, package management, runtime execution, and possible standalone binary distribution.
 
 Expected initial core dependencies are small:
 
 ```txt
 Playwright
 Mustache
-Node/Bun filesystem APIs
-Node/Bun crypto APIs
+Bun filesystem APIs
+Bun crypto APIs
 ```
 
 `prepare.js` can be dynamically imported and executed directly by the JavaScript runtime.
@@ -1348,12 +1336,12 @@ This is only an implementation suggestion and should not become a rigid internal
 
 # 32. Runtime and Packaging
 
-The project should be written as an ordinary npm-compatible TypeScript CLI.
+The project should be written as a Bun-based TypeScript CLI.
 
 Initial public distribution may therefore be:
 
 ```bash
-npm install -g print-page
+bun install -g print-page
 ```
 
 with a standard package binary declaration.
@@ -1364,19 +1352,19 @@ For example:
 {
   "name": "print-page",
   "bin": {
-    "print-page": "./dist/cli.js"
+    "print-page": "./dist/bin.js"
   }
 }
 ```
 
-Bun can still be used comfortably for development:
+Bun owns development and package management:
 
 ```bash
 bun install
 bun run ...
 ```
 
-The code should remain Node-compatible rather than depending unnecessarily on Bun-specific APIs.
+The code may use Bun APIs and its built-in compatibility modules where package interoperability requires them.
 
 Bun may later be used to produce standalone executables once the Playwright-based renderer has been verified in that deployment form.
 
@@ -1504,9 +1492,9 @@ The following choices are considered fairly solid:
 
 - The CLI should be implemented in TypeScript.
 
-- The implementation should be Node-compatible and Bun-friendly.
+- The implementation should use Bun.
 
-- Initial distribution can be an npm-compatible CLI.
+- Initial distribution can be a Bun-installed CLI.
 
 - Standalone Bun binaries may be explored later.
 ```
@@ -1645,39 +1633,41 @@ How should every printable application in every repository be authored?
 
 ---
 
-# 37. Remaining Decisions Before Implementation
+# 37. Original Remaining Decisions
 
-The major unresolved details are now mostly interface-level:
+> **Implementation update:** the minimal `render` CLI, `settings.json`, JSON
+> and simple `--key=value` input mechanisms, `window.__PRINT_DATA__`,
+> `window.__PRINT_READY__`, local cache storage, and PDF output behavior are
+> now implemented. The list below records the remaining decisions at the time
+> of this preliminary handoff; printer integration and broader command design
+> remain deferred.
+
+The major unresolved details were mostly interface-level:
 
 ```txt
 1. Exact CLI command structure.
 
 2. How printable paths or template repositories are discovered.
 
-3. Input mechanisms:
-   - JSON file
-   - stdin
-   - direct CLI values
+3. Exact settings filename.
 
-4. Exact settings filename.
+4. Exact shape/name of the browser runtime data global.
 
-5. Exact shape/name of the browser runtime data global.
+5. Exact print-ready signaling API.
 
-6. Exact print-ready signaling API.
+6. Exact cache storage location.
 
-7. Exact cache storage location.
+7. Exact cache key composition.
 
-8. Exact cache key composition.
+8. Whether Chromium/renderer versions are included in the cache key.
 
-9. Whether Chromium/renderer versions are included in the cache key.
+9. Exact timeout scope.
 
-10. Exact timeout scope.
+10. PDF output naming and temporary-file behavior.
 
-11. PDF output naming and temporary-file behavior.
+11. Printer integration and host-platform differences.
 
-12. Printer integration and host-platform differences.
-
-13. Error reporting for:
+12. Error reporting for:
     - prepare.js
     - Mustache
     - browser JS
@@ -1686,9 +1676,9 @@ The major unresolved details are now mostly interface-level:
     - readiness timeout
     - Chromium errors
 
-14. Whether template build commands ever become a print-page convenience feature.
+13. Whether template build commands ever become a print-page convenience feature.
 
-15. Whether settings are JSON, another simple format, or inferred partly from CLI flags.
+14. Whether settings are JSON, another simple format, or inferred partly from CLI flags.
 ```
 
 These do not currently require changing the main architecture.

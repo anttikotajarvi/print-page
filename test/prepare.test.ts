@@ -1,6 +1,5 @@
-import assert from "node:assert/strict";
+import { expect, test } from "bun:test";
 import { fileURLToPath } from "node:url";
-import test from "node:test";
 
 import { prepareInput } from "../src/prepare.js";
 
@@ -9,7 +8,7 @@ const fixtures = fileURLToPath(new URL("./fixtures/", import.meta.url));
 test("prepareInput returns input unchanged when prepare.js is absent", async () => {
   const input = { name: "Ada" };
 
-  assert.strictEqual(await prepareInput(`${fixtures}/minimal`, input), input);
+  expect(await prepareInput(`${fixtures}/minimal`, input)).toBe(input);
 });
 
 test("prepareInput runs an asynchronous default export", async () => {
@@ -18,7 +17,7 @@ test("prepareInput runs an asynchronous default export", async () => {
     height: 297,
   });
 
-  assert.deepEqual(prepared, {
+  expect(prepared).toEqual({
     width: 210,
     height: 297,
     label: "210 × 297 mm",
@@ -30,7 +29,7 @@ test("prepareInput follows CommonJS package rules", async () => {
     name: "Ada",
   });
 
-  assert.deepEqual(prepared, {
+  expect(prepared).toEqual({
     name: "Ada",
     greeting: "Hello, Ada!",
   });

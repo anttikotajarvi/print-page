@@ -1,7 +1,11 @@
 node_modules/
 dist/
 coverage/
-bun.lock
-bun.lockb
 *.log
 .DS_Store
+*.pdf
+
+# Browser fixtures intentionally model a compiled application output.
+!test/fixtures/configured/dist/
+!test/fixtures/configured/dist/**
+
