@@ -78,30 +78,42 @@ test("runCli reports its version", async () => {
   expect(result.stderr).toBe("");
 });
 
-test("runCli reports an unknown command on stderr", async () => {
-  const result = await run(["unknown"]);
-
-  expect(result.code).toBe(2);
-  expect(result.stdout).toEqual(new Uint8Array());
-  expect(result.stderr).toMatch(/Unknown command: unknown/u);
-});
-
-test("runCli shows render-specific help", async () => {
-  const result = await run(["render", "--help"]);
+test("runCli renders when the printable directory is the first argument", async () => {
+  let received: RenderOptions | undefined;
+  const result = await run([`${fixtures}/minimal`], defaultServices({
+    render: async (options) => {
+      received = options;
+      return pdf;
+    },
+  }));
 
   expect(result.code).toBe(0);
+  expect(result.stdout).toEqual(pdf);
+  expect(result.stderr).toBe("");
+  expect(received).toEqual({
+    printableDirectory: resolve(`${fixtures}/minimal`),
+    input: {},
+  });
+});
+
+test("runCli shows help for the default command and accepts the legacy alias", async () => {
+  const result = await run(["--help"]);
+  const legacyResult = await run(["render", "--help"]);
+
+  expect(result.code).toBe(0);
+  expect(text(result.stdout)).toMatch(/print-page <printable-directory>/u);
   expect(text(result.stdout)).toMatch(/\[--output <pdf-path>\]/u);
   expect(text(result.stdout)).toMatch(/--<key>=<value>/u);
   expect(text(result.stdout)).toMatch(/--name="John Doe"/u);
   expect(result.stderr).toBe("");
+  expect(legacyResult).toEqual(result);
 });
 
 test("runCli writes raw PDF bytes to redirected stdout", async () => {
   let received: RenderOptions | undefined;
   const result = await run([
-    "render",
     `${fixtures}/minimal`,
-    "--data",
+    "-d",
     '{"name":"Ada"}',
   ], defaultServices({
     render: async (options) => {
@@ -124,10 +136,10 @@ test("runCli writes PDF bytes to --output and keeps stdout empty", async () => {
   const outputPath = join(directory, "nested", "card.pdf");
   let received: RenderOptions | undefined;
   const result = await run([
-    "render",
     `${fixtures}/minimal`,
-    `--output=${outputPath}`,
-    "--data",
+    "-o",
+    outputPath,
+    "-d",
     '{"name":"Ada"}',
   ], defaultServices({
     render: async (options) => {
@@ -149,7 +161,6 @@ test("runCli writes PDF bytes to --output and keeps stdout empty", async () => {
 test("runCli parses direct string input fields", async () => {
   let received: RenderOptions | undefined;
   const result = await run([
-    "render",
     `${fixtures}/minimal`,
     "--name=John Doe",
     "--referenceId=ABC-123",
@@ -175,9 +186,8 @@ test("runCli parses direct string input fields", async () => {
 test("runCli reads JSON input from stdin", async () => {
   let received: RenderOptions | undefined;
   const result = await run([
-    "render",
     `${fixtures}/minimal`,
-    "--input",
+    "-i",
     "-",
   ], defaultServices({
     readStdin: async () => '{"name":"Ada"}',
@@ -195,9 +205,8 @@ test("runCli reads JSON input from a file", async () => {
   let received: RenderOptions | undefined;
   let requestedPath: string | undefined;
   const result = await run([
-    "render",
     `${fixtures}/minimal`,
-    "--input",
+    "-i",
     "input.json",
   ], defaultServices({
     readInputFile: async (path) => {
@@ -220,11 +229,10 @@ test("runCli defaults data to an empty object and keeps force at the output edge
   const outputPath = join(directory, "out.pdf");
   let received: RenderOptions | undefined;
   const result = await run([
-    "render",
     `${fixtures}/minimal`,
     "-o",
     outputPath,
-    "--force",
+    "-f",
   ], defaultServices({
     render: async (options) => {
       received = options;

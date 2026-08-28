@@ -6,7 +6,7 @@ The complete preliminary design is in [`handoff.md`](./handoff.md).
 
 ## Project status
 
-The `render` command is implemented. It loads settings and optional preparation code, renders through Chromium using a virtual local origin, returns PDF bytes, and reuses deterministic output from the local cache when enabled. The CLI can write those bytes to a file or directly to redirected stdout.
+Rendering is implemented. The CLI loads settings and optional preparation code, renders through Chromium using a virtual local origin, returns PDF bytes, and reuses deterministic output from the local cache when enabled. It can write those bytes to a file or directly to redirected stdout.
 
 Host printer integration is intentionally not implemented yet; this CLI produces PDFs only.
 
@@ -77,10 +77,10 @@ bun dist/bin.js --help
 ## CLI
 
 ```text
-print-page render <printable-directory> [--output <pdf-path>] [options]
+print-page <printable-directory> [--output <pdf-path>] [options]
 ```
 
-`render` options:
+Options:
 
 - `-o, --output <path>` writes the PDF to a file. The file is not replaced unless `--force` is provided.
 - Without `--output`, the PDF is written as raw bytes to stdout. Stdout must be redirected or piped; print-page refuses to write binary PDF data to an interactive terminal.
@@ -88,19 +88,23 @@ print-page render <printable-directory> [--output <pdf-path>] [options]
 - `-d, --data <json>` supplies literal JSON.
 - `-i, --input <path>` reads JSON from a file; use `-` for stdin.
 - `-f, --force` permits replacement of an existing output PDF and requires `--output`.
+- `-h, --help` shows CLI help; `-v, --version` prints the version.
+
+The former `print-page render <printable-directory>` form remains accepted for
+existing scripts, but new commands can omit `render`.
 
 When PDF bytes go to stdout, stdout contains only the PDF. Errors, status
 messages, and other diagnostics are written to stderr.
 
 ```bash
 # Write a file.
-bun run dev -- render ./examples/label --output ./label.pdf \
+bun run dev -- ./examples/label --output ./label.pdf \
   --data '{"productName":"Example Curtain"}'
 
 # Stream directly to a file or printer.
-bun run dev -- render ./examples/label --data '{"productName":"Example Curtain"}' \
+bun run dev -- ./examples/label --data '{"productName":"Example Curtain"}' \
   > ./label.pdf
-bun run dev -- render ./examples/label --data '{"productName":"Example Curtain"}' \
+bun run dev -- ./examples/label --data '{"productName":"Example Curtain"}' \
   | lp -d GODEX_MEDIUM -
 ```
 
@@ -113,16 +117,16 @@ available as `window.__PRINT_DATA__`.
 
 ```bash
 # Simple string fields. Quote values containing spaces or shell-special characters.
-bun run dev -- render ./examples/label -o ./label.pdf \
+bun run dev -- ./examples/label -o ./label.pdf \
   --productName="Example Curtain" --referenceId=ABC-123
 
 # Typed or structured data.
-bun run dev -- render ./examples/label -o ./label.pdf \
+bun run dev -- ./examples/label -o ./label.pdf \
   --data '{"productName":"Example Curtain","copies":2}'
 
 # JSON from stdin.
 printf '%s\n' '{"productName":"Example Curtain"}' \
-  | bun run dev -- render ./examples/label -o ./label.pdf --input -
+  | bun run dev -- ./examples/label -o ./label.pdf --input -
 ```
 
 `--productName="Example Curtain"` produces

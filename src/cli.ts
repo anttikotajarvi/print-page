@@ -19,20 +19,7 @@ const HELP = `print-page ${VERSION}
 Render HTML-based printables with Chromium.
 
 Usage:
-  print-page render <printable-directory> [--output <pdf-path>] [options]
-
-Commands:
-  render  Render a printable to PDF
-
-Options:
-  -h, --help     Show help
-  -v, --version  Show the version
-
-Run "print-page render --help" for render options.
-`;
-
-const RENDER_HELP = `Usage:
-  print-page render <printable-directory> [--output <pdf-path>] [options]
+  print-page <printable-directory> [--output <pdf-path>] [options]
 
 Options:
   -o, --output <path>  Write the PDF to this path
@@ -41,20 +28,21 @@ Options:
   -i, --input <path>   JSON input file; use - to read stdin
   -f, --force          Replace an existing output file (requires --output)
   -h, --help           Show this help
+  -v, --version        Show the version
 
 Choose one input form: --key=value fields, --data, or --input. Direct fields
 are strings; use JSON for typed or nested values. With no input option, the
 printable receives {}.
 
 Example:
-  print-page render ./label -o ./label.pdf --name="John Doe"
-  print-page render ./label --name="John Doe" > ./label.pdf
+  print-page ./label -o ./label.pdf --name="John Doe"
+  print-page ./label --name="John Doe" > ./label.pdf
 
 Without --output, stdout must be redirected or piped. Page size and margins
 are controlled by printable CSS.
 `;
 
-const RENDER_OPTIONS = new Set([
+const CLI_OPTIONS = new Set([
   "-o",
   "--output",
   "-d",
@@ -121,16 +109,17 @@ export async function runCli(
       return 0;
     }
 
-    if (args[0] !== "render") {
-      throw new CliUsageError(`Unknown command: ${args[0]}`);
-    }
+    // Keep the former command form working while rendering directly by
+    // default. This lets callers simplify to `print-page <directory>` without
+    // breaking existing scripts that still use `print-page render <directory>`.
+    const renderArgs = args[0] === "render" ? args.slice(1) : args;
 
-    if (args.slice(1).includes("--help") || args.slice(1).includes("-h")) {
-      io.stdout.write(RENDER_HELP);
+    if (renderArgs.includes("--help") || renderArgs.includes("-h")) {
+      io.stdout.write(HELP);
       return 0;
     }
 
-    const renderArguments = parseRenderArguments(args.slice(1));
+    const renderArguments = parseRenderArguments(renderArgs);
 
     if (renderArguments.outputPath === undefined && io.stdout.isTTY) {
       throw new CliUsageError(
@@ -254,7 +243,7 @@ function parseRenderArguments(args: readonly string[]): RenderArguments {
         }
 
         if (printableDirectory !== undefined) {
-          throw new CliUsageError("render accepts exactly one printable directory.");
+          throw new CliUsageError("print-page accepts exactly one printable directory.");
         }
 
         printableDirectory = argument;
@@ -262,7 +251,7 @@ function parseRenderArguments(args: readonly string[]): RenderArguments {
   }
 
   if (printableDirectory === undefined) {
-    throw new CliUsageError("render requires a printable directory.");
+    throw new CliUsageError("print-page requires a printable directory.");
   }
 
   if (force && outputPath === undefined) {
@@ -341,7 +330,7 @@ function nextValue(
 
   if (
     value === undefined
-    || RENDER_OPTIONS.has(value)
+    || CLI_OPTIONS.has(value)
     || (kind === "json" && value.startsWith("--"))
     || (kind !== "json" && value.startsWith("-") && value !== "-")
     || (kind === "path" && value === "-")
