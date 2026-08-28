@@ -1,0 +1,7 @@
+{
+  "entryPoint": "dist/index.html",
+  "injectionMode": "window",
+  "useCache": false,
+  "waitForPrintReady": true,
+  "timeout": 45000
+}

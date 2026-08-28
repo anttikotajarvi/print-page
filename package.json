@@ -1,0 +1,38 @@
+{
+  "name": "print-page",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Render HTML-based printables to PDF with Chromium.",
+  "type": "module",
+  "bin": {
+    "print-page": "./dist/bin.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "handoff.md"
+  ],
+  "engines": {
+    "node": ">=22.7.0"
+  },
+  "scripts": {
+    "build": "npm run clean && tsc -p tsconfig.build.json",
+    "check": "npm run typecheck && npm test && npm run build",
+    "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
+    "dev": "tsx src/bin.ts",
+    "prepack": "npm run build",
+    "test": "node --import tsx --test test/*.test.ts",
+    "test:watch": "node --import tsx --test --watch test/*.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "mustache": "^4.2.0",
+    "playwright": "^1.62.1"
+  },
+  "devDependencies": {
+    "@types/mustache": "^4.2.6",
+    "@types/node": "^22.20.1",
+    "tsx": "^4.23.12",
+    "typescript": "^7.0.2"
+  }
+}
