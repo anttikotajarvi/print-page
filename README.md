@@ -21,6 +21,21 @@ printable/
   index.html
 ```
 
+A printable can also keep named reusable input beside its template:
+
+```text
+package-label/
+  index.html
+  prepare.js
+  presets/
+    repair-kit.json
+    mounting-parts.json
+```
+
+`presets/` is optional and requires no setting. `--preset repair-kit` loads
+`package-label/presets/repair-kit.json`; the preset belongs to the printable,
+not to a shared input directory.
+
 Settings are optional. Their current defaults are:
 
 ```json
@@ -114,6 +129,7 @@ Options:
 - `--key=value` supplies a simple string input field; repeat it for each field.
 - `-d, --data <json>` supplies literal JSON.
 - `-i, --input <path>` reads JSON from a file; use `-` for stdin.
+- `--preset <name>` loads `presets/<name>.json` from the printable.
 - `-f, --force` permits replacement of an existing output PDF and requires `--output`.
 - `-h, --help` shows CLI help; `-v, --version` prints the version.
 
@@ -137,10 +153,21 @@ bun run dev -- ./examples/label --data '{"productName":"Example Curtain"}' \
 
 ### Passing input
 
-Choose exactly one input form. Input is passed to `prepare.js`, when present.
-In the default `mustache` mode, fields become the template context (for
-example, `{{name}}`). With `"injectionMode": "window"`, the same data is
-available as `window.__PRINT_DATA__`.
+Choose at most one explicit input form. An optional `--preset <name>` can be
+combined with direct fields, `--data`, or `--input`. The data flow is:
+
+```text
+preset data → explicit input overrides → prepare.js → normal rendering pipeline
+```
+
+When both sources are JSON objects, their top-level fields are merged and
+explicit input wins; nested objects and arrays are replaced rather than merged
+recursively. If either source is not an object, the explicit input replaces the
+preset.
+`prepare.js` receives only the resulting input, so it does not need to know
+which preset was selected. In the default `mustache` mode, fields become the
+template context (for example, `{{name}}`). With `"injectionMode": "window"`,
+the same data is available as `window.__PRINT_DATA__`.
 
 ```bash
 # Simple string fields. Quote values containing spaces or shell-special characters.
@@ -151,6 +178,10 @@ bun run dev -- ./examples/label -o ./label.pdf \
 bun run dev -- ./examples/label -o ./label.pdf \
   --data '{"productName":"Example Curtain","copies":2}'
 
+# Use a printable-local preset, then override selected values.
+bun run dev -- ./examples/package-label -o ./label.pdf \
+  --preset repair-kit --data '{"copies":2}'
+
 # JSON from stdin.
 printf '%s\n' '{"productName":"Example Curtain"}' \
   | bun run dev -- ./examples/label -o ./label.pdf --input -
@@ -160,7 +191,8 @@ printf '%s\n' '{"productName":"Example Curtain"}' \
 `{ "productName": "Example Curtain" }`. Direct-field values are always
 strings and keys are preserved exactly; use `--data` or `--input` for numbers,
 booleans, `null`, arrays, or nested objects. Direct fields, `--data`, and
-`--input` cannot be combined. Built-in option names, such as `--output`, are
+`--input` cannot be combined with each other, but any one of them can be used
+with `--preset`. Built-in option names, such as `--output` and `--preset`, are
 reserved, and duplicate direct-field names are rejected.
 
 The renderer uses a Playwright-managed Chromium. Install it once with `bunx playwright install chromium`. Printable CSS controls page size and margins; A4 is the fallback when CSS does not define a page size.

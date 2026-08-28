@@ -9,6 +9,7 @@ import {
 import { dirname, join, resolve } from "node:path";
 
 import { PrintPageError } from "./errors.js";
+import { resolveWithinDirectory } from "./paths.js";
 import { render, type RenderOptions } from "./render.js";
 import { VERSION } from "./version.js";
 
@@ -26,13 +27,15 @@ Options:
   --<key>=<value>      Simple string input field; repeat as needed
   -d, --data <json>    Literal JSON input
   -i, --input <path>   JSON input file; use - to read stdin
+  --preset <name>      Load presets/<name>.json from the printable
   -f, --force          Replace an existing output file (requires --output)
   -h, --help           Show this help
   -v, --version        Show the version
 
-Choose one input form: --key=value fields, --data, or --input. Direct fields
-are strings; use JSON for typed or nested values. With no input option, the
-printable receives {}.
+An optional --preset may be combined with one input form: --key=value fields,
+--data, or --input. Preset values are the base input and explicit input wins.
+Direct fields are strings; use JSON for typed or nested values. With no input
+option or preset, the printable receives {}.
 
 Example:
   print-page ./label -o ./label.pdf --name="John Doe"
@@ -49,6 +52,7 @@ const CLI_OPTIONS = new Set([
   "--data",
   "-i",
   "--input",
+  "--preset",
   "-f",
   "--force",
   "-h",
@@ -76,6 +80,7 @@ interface RenderArguments {
   outputPath?: string;
   data?: string;
   inputPath?: string;
+  presetName?: string;
   directInput?: Record<string, string>;
   force: boolean;
 }
@@ -127,7 +132,12 @@ export async function runCli(
       );
     }
 
-    const input = await loadInput(renderArguments, services);
+    const printableDirectory = resolve(renderArguments.printableDirectory);
+    const input = await loadInput(
+      renderArguments,
+      printableDirectory,
+      services,
+    );
     const outputPath = renderArguments.outputPath === undefined
       ? undefined
       : resolve(renderArguments.outputPath);
@@ -137,7 +147,7 @@ export async function runCli(
     }
 
     const pdf = await services.render({
-      printableDirectory: resolve(renderArguments.printableDirectory),
+      printableDirectory,
       input,
     });
 
@@ -160,6 +170,7 @@ function parseRenderArguments(args: readonly string[]): RenderArguments {
   let outputPath: string | undefined;
   let data: string | undefined;
   let inputPath: string | undefined;
+  let presetName: string | undefined;
   const directInput = new Map<string, string>();
   let force = false;
 
@@ -197,6 +208,18 @@ function parseRenderArguments(args: readonly string[]): RenderArguments {
           option,
         );
         break;
+      case "--preset": {
+        const value = inlineValue ?? nextValue(args, ++index, option, "preset");
+
+        if (!isPresetName(value)) {
+          throw new CliUsageError(
+            "--preset requires a non-empty name without path separators.",
+          );
+        }
+
+        presetName = setOnce(presetName, value, option);
+        break;
+      }
       case "-f":
       case "--force":
         if (inlineValue !== undefined) {
@@ -273,6 +296,7 @@ function parseRenderArguments(args: readonly string[]): RenderArguments {
     ...(outputPath === undefined ? {} : { outputPath }),
     ...(data === undefined ? {} : { data }),
     ...(inputPath === undefined ? {} : { inputPath }),
+    ...(presetName === undefined ? {} : { presetName }),
     ...(directInput.size === 0
       ? {}
       : { directInput: Object.fromEntries(directInput) }),
@@ -282,18 +306,45 @@ function parseRenderArguments(args: readonly string[]): RenderArguments {
 
 async function loadInput(
   args: RenderArguments,
+  printableDirectory: string,
   services: CliServices,
 ): Promise<unknown> {
+  const suppliedInput = await loadSuppliedInput(args, services);
+
+  if (args.presetName === undefined) {
+    return suppliedInput.input;
+  }
+
+  const preset = await loadPreset(
+    printableDirectory,
+    args.presetName,
+    services,
+  );
+
+  return suppliedInput.wasSupplied
+    ? mergePresetInput(preset, suppliedInput.input)
+    : preset;
+}
+
+interface SuppliedInput {
+  input: unknown;
+  wasSupplied: boolean;
+}
+
+async function loadSuppliedInput(
+  args: RenderArguments,
+  services: CliServices,
+): Promise<SuppliedInput> {
   if (args.data !== undefined) {
-    return parseJson(args.data, "--data");
+    return { input: parseJson(args.data, "--data"), wasSupplied: true };
   }
 
   if (args.directInput !== undefined) {
-    return args.directInput;
+    return { input: args.directInput, wasSupplied: true };
   }
 
   if (args.inputPath === undefined) {
-    return {};
+    return { input: {}, wasSupplied: false };
   }
 
   let source: string;
@@ -307,7 +358,53 @@ async function loadInput(
     throw new Error(`Could not read JSON input from ${location}.`, { cause: error });
   }
 
-  return parseJson(source, args.inputPath === "-" ? "stdin" : "--input");
+  return {
+    input: parseJson(source, args.inputPath === "-" ? "stdin" : "--input"),
+    wasSupplied: true,
+  };
+}
+
+async function loadPreset(
+  printableDirectory: string,
+  presetName: string,
+  services: CliServices,
+): Promise<unknown> {
+  const presetPath = resolveWithinDirectory(
+    printableDirectory,
+    `presets/${presetName}.json`,
+    "Preset",
+  );
+  let source: string;
+
+  try {
+    source = await services.readInputFile(presetPath);
+  } catch (error) {
+    throw new Error(
+      `Could not read preset "${presetName}" from ${presetPath}.`,
+      { cause: error },
+    );
+  }
+
+  return parseJson(source, `preset "${presetName}"`);
+}
+
+function mergePresetInput(preset: unknown, suppliedInput: unknown): unknown {
+  if (isRecord(preset) && isRecord(suppliedInput)) {
+    return { ...preset, ...suppliedInput };
+  }
+
+  return suppliedInput;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isPresetName(value: string): boolean {
+  return value.length > 0
+    && value !== "."
+    && value !== ".."
+    && !/[\\/\0]/u.test(value);
 }
 
 function parseJson(source: string, label: string): unknown {
@@ -324,7 +421,7 @@ function nextValue(
   args: readonly string[],
   index: number,
   flag: string,
-  kind: "path" | "json" | "input",
+  kind: "path" | "json" | "input" | "preset",
 ): string {
   const value = args[index];
 
