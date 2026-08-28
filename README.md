@@ -25,6 +25,7 @@ Settings are optional. Their current defaults are:
 
 ```json
 {
+  "root": ".",
   "entryPoint": "index.html",
   "injectionMode": "mustache",
   "useCache": true,
@@ -33,14 +34,40 @@ Settings are optional. Their current defaults are:
 }
 ```
 
+`root` is the directory exposed as the virtual-origin root. It is relative to
+the directory passed to `print-page`, defaults to `.`, and may use `..` to
+share assets between document directories. `entryPoint` is resolved from that
+root. For example, a collection can share one stylesheet:
+
+```text
+printables/
+  assets/
+    main.css
+  card/
+    settings.json
+    index.html
+```
+
+```json
+{
+  "root": "..",
+  "entryPoint": "card/index.html"
+}
+```
+
+The card can then reference `/assets/main.css` (or `../assets/main.css`). A
+URL beginning with `./` remains relative to the HTML file's URL, so
+`./assets/main.css` would name `card/assets/main.css` in this example.
+
 A printable can add `settings.json`, an optional `prepare.js`, and any browser assets it needs. The prepare module follows Bun's module rules: use `export default` in an ESM or untyped package scope, or `module.exports` in a CommonJS package scope. Compiled frontend applications remain responsible for their own build and can point `entryPoint` at their generated HTML.
 
-Printables are trusted code, as described in the handoff. Virtual-origin request paths are kept lexically inside the printable, while symlinks created by a printable are intentionally followed rather than treated as a security sandbox.
+Printables are trusted code, as described in the handoff. Virtual-origin request paths are kept lexically inside the configured `root`, while symlinks created by a printable are intentionally followed rather than treated as a security sandbox.
 
 Nested entry points keep their browser path (for example, `dist/index.html` is
 served as `/dist/index.html`), so relative and parent-relative assets continue
-to work. Vite-style `/assets/...` URLs are also resolved beside a nested entry
-point.
+to work. With the default document-local root, Vite-style `/assets/...` URLs
+are also resolved beside a nested entry point. With a configured shared root,
+`/assets/...` resolves from that shared root instead.
 
 ## Development
 
@@ -138,7 +165,7 @@ reserved, and duplicate direct-field names are rejected.
 
 The renderer uses a Playwright-managed Chromium. Install it once with `bunx playwright install chromium`. Printable CSS controls page size and margins; A4 is the fallback when CSS does not define a page size.
 
-Caching follows each printable's `useCache` setting (enabled by default). Cache entries are stored under `$XDG_CACHE_HOME/print-page`, or `~/.cache/print-page` when XDG is not set. The cache key combines the input, effective settings, renderer version, and printable files; it deliberately does not try to track external dependencies.
+Caching follows each printable's `useCache` setting (enabled by default). Cache entries are stored under `$XDG_CACHE_HOME/print-page`, or `~/.cache/print-page` when XDG is not set. The cache key combines the input, effective settings, renderer version, and every file under the configured root; it deliberately does not try to track external dependencies outside that root.
 
 ## Source layout
 

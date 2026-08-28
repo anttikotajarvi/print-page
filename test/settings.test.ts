@@ -20,6 +20,7 @@ test("loadSettings merges and validates configured settings", async () => {
   const settings = await loadSettings(`${fixtures}/configured`);
 
   expect(settings).toEqual({
+    root: ".",
     entryPoint: "dist/index.html",
     injectionMode: "window",
     useCache: false,
@@ -46,8 +47,19 @@ test("validateSettings rejects invalid values", () => {
 test("validateSettings rejects entry points outside the printable", () => {
   expect(
     () => validateSettings({ entryPoint: "../index.html" }),
-  ).toThrow(/entryPoint must name a relative path inside the printable directory/u);
+  ).toThrow(/entryPoint must name a relative path inside the configured root/u);
   expect(
     () => validateSettings({ entryPoint: "/tmp/index.html" }),
-  ).toThrow(/entryPoint must name a relative path inside the printable directory/u);
+  ).toThrow(/entryPoint must name a relative path inside the configured root/u);
+});
+
+test("validateSettings accepts a parent root but rejects invalid root paths", () => {
+  expect(validateSettings({ root: ".." }).root).toBe("..");
+
+  expect(
+    () => validateSettings({ root: "/shared/printables" }),
+  ).toThrow(/root must be a non-empty relative directory path/u);
+  expect(
+    () => validateSettings({ root: "" }),
+  ).toThrow(/root must be a non-empty relative directory path/u);
 });

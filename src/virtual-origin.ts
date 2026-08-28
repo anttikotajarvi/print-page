@@ -20,6 +20,7 @@ export interface VirtualResourceOptions {
   requestUrl: string;
   injectionMode: InjectionMode;
   data: unknown;
+  useEntryAssetAlias?: boolean;
 }
 
 export interface VirtualResource {
@@ -92,6 +93,7 @@ export function resolveVirtualResourcePath(
   printableDirectory: string,
   requestUrl: string,
   entryPoint: string,
+  useEntryAssetAlias = true,
 ): string {
   let url: URL;
 
@@ -129,9 +131,11 @@ export function resolveVirtualResourcePath(
   const resourcePath = pathname === "/" ? entryPoint : pathname.slice(1);
 
   // Vite's default base emits `/assets/...` even if the built index is in a
-  // `dist/` directory. Keep this narrow alias while retaining root-relative
-  // behavior for every other path.
-  const resourceRoot = pathname === "/assets" || pathname.startsWith("/assets/")
+  // `dist/` directory. Preserve that narrow alias for a document-local root.
+  // An explicitly configured root owns root-relative URLs instead, which lets
+  // a collection expose shared `/assets/...` files.
+  const resourceRoot = useEntryAssetAlias
+    && (pathname === "/assets" || pathname.startsWith("/assets/"))
     ? dirname(entryPath)
     : root;
 
@@ -157,6 +161,7 @@ export async function loadVirtualResource(
     options.printableDirectory,
     options.requestUrl,
     options.entryPoint,
+    options.useEntryAssetAlias,
   );
   const entryPath = resolveWithinDirectory(
     options.printableDirectory,

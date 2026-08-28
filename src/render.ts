@@ -26,6 +26,7 @@ export interface RenderRequest {
   printableDirectory: string;
   settings: PrintableSettings;
   data: unknown;
+  useEntryAssetAlias?: boolean;
 }
 
 /**
@@ -101,6 +102,9 @@ export class PlaywrightPdfRenderer implements PdfRenderer {
               requestUrl: route.request().url(),
               injectionMode: request.settings.injectionMode,
               data: request.data,
+              ...(request.useEntryAssetAlias === undefined
+                ? {}
+                : { useEntryAssetAlias: request.useEntryAssetAlias }),
             });
 
             await route.fulfill({
@@ -175,6 +179,11 @@ export async function render(options: RenderOptions): Promise<Uint8Array> {
   const printableDirectory = await requireDirectory(options.printableDirectory);
 
   const settings = await loadSettings(printableDirectory);
+  const resourceRoot = await requireDirectory(
+    resolve(printableDirectory, settings.root),
+    "Printable root",
+  );
+  const useEntryAssetAlias = resourceRoot === printableDirectory;
   const shouldUseCache = options.useCache ?? settings.useCache;
   const cache = shouldUseCache
     ? options.cache ?? new FileRenderCache()
@@ -185,7 +194,7 @@ export async function render(options: RenderOptions): Promise<Uint8Array> {
   if (cache !== undefined) {
     try {
       cacheKey = await createCacheKey({
-        printableDirectory,
+        printableDirectory: resourceRoot,
         input: options.input,
         rendererVersion: VERSION,
         settings,
@@ -204,9 +213,10 @@ export async function render(options: RenderOptions): Promise<Uint8Array> {
   const data = await prepareInput(printableDirectory, options.input);
   const renderer = options.renderer ?? new PlaywrightPdfRenderer();
   const pdf = await renderer.render({
-    printableDirectory,
+    printableDirectory: resourceRoot,
     settings,
     data,
+    useEntryAssetAlias,
   });
 
   if (!isPdf(pdf)) {
@@ -223,7 +233,10 @@ export async function render(options: RenderOptions): Promise<Uint8Array> {
   return pdf;
 }
 
-async function requireDirectory(path: string): Promise<string> {
+async function requireDirectory(
+  path: string,
+  label = "Printable directory",
+): Promise<string> {
   const directory = resolve(path);
 
   try {
@@ -232,7 +245,7 @@ async function requireDirectory(path: string): Promise<string> {
     if (!details.isDirectory()) {
       throw new PrintPageError(
         "INVALID_PATH",
-        `Printable directory ${directory} is not a directory.`,
+        `${label} ${directory} is not a directory.`,
       );
     }
   } catch (error) {
@@ -242,7 +255,7 @@ async function requireDirectory(path: string): Promise<string> {
 
     throw new PrintPageError(
       "INVALID_PATH",
-      `Printable directory ${directory} does not exist or cannot be read.`,
+      `${label} ${directory} does not exist or cannot be read.`,
       { cause: error },
     );
   }

@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { isAbsolute, resolve } from "node:path";
 
 import { PrintPageError } from "./errors.js";
 import { resolveWithinDirectory } from "./paths.js";
@@ -11,6 +11,7 @@ import {
 export const SETTINGS_FILE_NAME = "settings.json";
 
 export const DEFAULT_SETTINGS: Readonly<PrintableSettings> = Object.freeze({
+  root: ".",
   entryPoint: "index.html",
   injectionMode: "mustache",
   useCache: true,
@@ -19,6 +20,7 @@ export const DEFAULT_SETTINGS: Readonly<PrintableSettings> = Object.freeze({
 });
 
 const SETTINGS_KEYS = new Set<keyof PrintableSettings>([
+  "root",
   "entryPoint",
   "injectionMode",
   "useCache",
@@ -87,6 +89,18 @@ export function validateSettings(
   } as PrintableSettings;
 
   if (
+    typeof settings.root !== "string"
+    || settings.root.trim().length === 0
+    || settings.root.includes("\0")
+    || isAbsolute(settings.root)
+  ) {
+    throw invalidSettings(
+      source,
+      "root must be a non-empty relative directory path",
+    );
+  }
+
+  if (
     typeof settings.entryPoint !== "string" ||
     settings.entryPoint.trim().length === 0
   ) {
@@ -105,13 +119,13 @@ export function validateSettings(
     if (entryPath === validationRoot) {
       throw new PrintPageError(
         "INVALID_PATH",
-        "entryPoint must name a file inside the printable directory.",
+        "entryPoint must name a file inside the configured root.",
       );
     }
   } catch (error) {
     throw invalidSettings(
       source,
-      "entryPoint must name a relative path inside the printable directory",
+      "entryPoint must name a relative path inside the configured root",
       error,
     );
   }

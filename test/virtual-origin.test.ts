@@ -12,6 +12,7 @@ import {
 const fixtures = fileURLToPath(new URL("./fixtures/", import.meta.url));
 const minimal = `${fixtures}/minimal`;
 const configured = `${fixtures}/configured`;
+const sharedRoot = `${fixtures}/shared-root`;
 
 test("createVirtualEntryUrl preserves a nested entry path", () => {
   expect(
@@ -82,6 +83,22 @@ test("virtual origin serves nested and Vite-absolute assets", async () => {
     expect(resource.contentType).toBe("text/javascript; charset=utf-8");
     expect(resource.body.toString("utf8")).toMatch(/CONFIGURED_PRINTABLE/u);
   }
+});
+
+test("virtual origin serves shared assets from a configured root", async () => {
+  const origin = createVirtualOrigin(sharedRoot, "card/index.html");
+  const stylesheet = await loadVirtualResource({
+    printableDirectory: origin.printableDirectory,
+    entryPoint: origin.entryPoint,
+    requestUrl: "http://print.local/assets/main.css",
+    injectionMode: "mustache",
+    data: {},
+    useEntryAssetAlias: false,
+  });
+
+  expect(origin.entryUrl).toBe("http://print.local/card/index.html");
+  expect(stylesheet.sourcePath).toBe(resolve(sharedRoot, "assets/main.css"));
+  expect(stylesheet.body.toString("utf8")).toContain("rebeccapurple");
 });
 
 test("resolveVirtualResourcePath rejects another origin", () => {

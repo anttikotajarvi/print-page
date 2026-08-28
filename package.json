@@ -1,6 +1,6 @@
 {
   "name": "print-page",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "Render HTML-based printables to PDF with Chromium.",
   "type": "module",

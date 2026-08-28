@@ -1,0 +1,5 @@
+{
+  "root": "..",
+  "entryPoint": "card/index.html",
+  "useCache": false
+}

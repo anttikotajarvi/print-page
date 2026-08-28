@@ -8,6 +8,7 @@ import type { PrintableSettings } from "../src/types.js";
 
 const temporaryDirectories: string[] = [];
 const settings: PrintableSettings = {
+  root: ".",
   entryPoint: "index.html",
   injectionMode: "mustache",
   useCache: true,

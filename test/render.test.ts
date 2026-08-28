@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { FileRenderCache, type RenderCache } from "../src/cache.js";
@@ -61,6 +61,27 @@ test("render prepares data and returns renderer output", async () => {
     height: 297,
     label: "210 × 297 mm",
   });
+});
+
+test("render resolves the configured root before rendering", async () => {
+  let received: RenderRequest | undefined;
+
+  const result = await render({
+    printableDirectory: `${fixtures}/shared-root/card`,
+    input: {},
+    cache: new MemoryCache(),
+    renderer: {
+      render: async (request) => {
+        received = request;
+        return pdf;
+      },
+    },
+  });
+
+  expect(result).toEqual(pdf);
+  expect(received?.printableDirectory).toBe(resolve(fixtures, "shared-root"));
+  expect(received?.settings.entryPoint).toBe("card/index.html");
+  expect(received?.useEntryAssetAlias).toBeFalse();
 });
 
 test("render reuses a deterministic cached PDF", async () => {
