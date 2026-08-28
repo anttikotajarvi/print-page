@@ -1,12 +1,12 @@
 import { afterEach, expect, test } from "bun:test";
-import { lstat, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { FileRenderCache, type RenderCache } from "../src/cache.js";
 import {
-  renderToFile,
+  render,
   type PdfRenderer,
   type RenderRequest,
 } from "../src/render.js";
@@ -39,69 +39,59 @@ afterEach(async () => {
   );
 });
 
-test("renderToFile prepares data and writes renderer output", async () => {
-  const directory = await temporaryDirectory();
-  const outputPath = join(directory, "nested", "card.pdf");
+test("render prepares data and returns renderer output", async () => {
   let received: RenderRequest | undefined;
   const renderer: PdfRenderer = {
     render: async (request) => {
       received = request;
-      return { bytes: pdf };
+      return pdf;
     },
   };
 
-  const result = await renderToFile({
+  const result = await render({
     printableDirectory: `${fixtures}/with-prepare`,
     input: { width: 210, height: 297 },
-    outputPath,
     renderer,
     cache: new MemoryCache(),
   });
 
-  expect(result).toEqual({ outputPath, cacheHit: false });
+  expect(result).toEqual(pdf);
   expect(received?.data).toEqual({
     width: 210,
     height: 297,
     label: "210 × 297 mm",
   });
-  expect(await readFile(outputPath)).toEqual(Buffer.from(pdf));
 });
 
-test("renderToFile reuses a deterministic cached PDF", async () => {
-  const directory = await temporaryDirectory();
+test("render reuses a deterministic cached PDF", async () => {
   const cache = new MemoryCache();
   let renderCount = 0;
   const renderer: PdfRenderer = {
     render: async () => {
       renderCount += 1;
-      return { bytes: pdf };
+      return pdf;
     },
   };
 
-  const first = await renderToFile({
+  const first = await render({
     printableDirectory: `${fixtures}/minimal`,
     input: { name: "Ada" },
-    outputPath: join(directory, "first.pdf"),
     renderer,
     cache,
   });
-  const secondOutput = join(directory, "second.pdf");
-  const second = await renderToFile({
+  const second = await render({
     printableDirectory: `${fixtures}/minimal`,
     input: { name: "Ada" },
-    outputPath: secondOutput,
     renderer,
     cache,
   });
 
-  expect(first.cacheHit).toBe(false);
-  expect(second).toEqual({ outputPath: secondOutput, cacheHit: true });
+  expect(first).toEqual(pdf);
+  expect(second).toEqual(pdf);
   expect(renderCount).toBe(1);
-  expect(await readFile(secondOutput)).toEqual(Buffer.from(pdf));
 });
 
-test("renderToFile ignores an invalid cached value", async () => {
-  const directory = await temporaryDirectory();
+test("render ignores an invalid cached value", async () => {
   let renderCount = 0;
   const cache: RenderCache = {
     read: async () => new Uint8Array(),
@@ -109,21 +99,31 @@ test("renderToFile ignores an invalid cached value", async () => {
     clear: async () => undefined,
   };
 
-  const result = await renderToFile({
+  const result = await render({
     printableDirectory: `${fixtures}/minimal`,
     input: { name: "Ada" },
-    outputPath: join(directory, "fresh.pdf"),
     cache,
     renderer: {
       render: async () => {
         renderCount += 1;
-        return { bytes: pdf };
+        return pdf;
       },
     },
   });
 
-  expect(result.cacheHit).toBe(false);
+  expect(result).toEqual(pdf);
   expect(renderCount).toBe(1);
+});
+
+test("render rejects a non-PDF renderer result", async () => {
+  await expect(
+    render({
+      printableDirectory: `${fixtures}/minimal`,
+      input: {},
+      cache: new MemoryCache(),
+      renderer: { render: async () => new Uint8Array() },
+    }),
+  ).rejects.toThrow("Renderer did not return a PDF.");
 });
 
 test("FileRenderCache creates and atomically publishes its cache directory", async () => {
@@ -134,99 +134,6 @@ test("FileRenderCache creates and atomically publishes its cache directory", asy
   await cache.write(key, pdf);
 
   expect(await cache.read(key)).toEqual(pdf);
-});
-
-test("renderToFile refuses to replace output without force", async () => {
-  const directory = await temporaryDirectory();
-  const outputPath = join(directory, "existing.pdf");
-  let renderCount = 0;
-  const renderer: PdfRenderer = {
-    render: async () => {
-      renderCount += 1;
-      return { bytes: pdf };
-    },
-  };
-  await writeFile(outputPath, "old PDF");
-
-  await expect(
-    renderToFile({
-      printableDirectory: `${fixtures}/minimal`,
-      input: {},
-      outputPath,
-      renderer,
-      cache: new MemoryCache(),
-    }),
-  ).rejects.toThrow(/already exists; use --force/u);
-  expect(renderCount).toBe(0);
-
-  await renderToFile({
-    printableDirectory: `${fixtures}/minimal`,
-    input: {},
-    outputPath,
-    force: true,
-    renderer,
-    cache: new MemoryCache(),
-  });
-  expect(renderCount).toBe(1);
-  expect(await readFile(outputPath)).toEqual(Buffer.from(pdf));
-});
-
-test.skipIf(process.platform === "win32")(
-  "renderToFile does not follow a dangling output symlink without force",
-  async () => {
-    const directory = await temporaryDirectory();
-    const targetPath = join(directory, "target.pdf");
-    const outputPath = join(directory, "output.pdf");
-    await symlink(targetPath, outputPath);
-    const renderer: PdfRenderer = {
-      render: async () => ({ bytes: pdf }),
-    };
-
-    await expect(
-      renderToFile({
-        printableDirectory: `${fixtures}/minimal`,
-        input: {},
-        outputPath,
-        renderer,
-        useCache: false,
-      }),
-    ).rejects.toThrow(/already exists; use --force/u);
-    expect(await Bun.file(targetPath).exists()).toBe(false);
-    expect((await lstat(outputPath)).isSymbolicLink()).toBe(true);
-
-    await renderToFile({
-      printableDirectory: `${fixtures}/minimal`,
-      input: {},
-      outputPath,
-      force: true,
-      renderer,
-      useCache: false,
-    });
-
-    expect((await lstat(outputPath)).isSymbolicLink()).toBe(false);
-    expect(await Bun.file(targetPath).exists()).toBe(false);
-    expect(await readFile(outputPath)).toEqual(Buffer.from(pdf));
-  },
-);
-
-test("renderToFile leaves no output when rendering fails", async () => {
-  const directory = await temporaryDirectory();
-  const outputPath = join(directory, "failed.pdf");
-
-  await expect(
-    renderToFile({
-      printableDirectory: `${fixtures}/minimal`,
-      input: {},
-      outputPath,
-      renderer: {
-        render: async () => {
-          throw new Error("browser failed");
-        },
-      },
-      cache: new MemoryCache(),
-    }),
-  ).rejects.toThrow("browser failed");
-  expect(await Bun.file(outputPath).exists()).toBe(false);
 });
 
 async function temporaryDirectory(): Promise<string> {

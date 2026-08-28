@@ -22,7 +22,6 @@ export interface CacheKeyOptions {
   printableDirectory: string;
   input: unknown;
   settings: PrintableSettings;
-  outputPath?: string;
   rendererVersion: string;
 }
 
@@ -82,9 +81,6 @@ export async function createCacheKey(
   options: CacheKeyOptions,
 ): Promise<string> {
   const root = resolve(options.printableDirectory);
-  const excludedPath = options.outputPath === undefined
-    ? undefined
-    : resolve(options.outputPath);
   const hasher = new Bun.CryptoHasher("sha256");
 
   hasher.update(`print-page-cache-v${CACHE_VERSION}\0`);
@@ -94,7 +90,7 @@ export async function createCacheKey(
     settings: options.settings,
   }));
 
-  for (const filePath of await printableFiles(root, excludedPath)) {
+  for (const filePath of await printableFiles(root)) {
     const relativePath = relative(root, filePath).split(sep).join("/");
     const contents = await readFile(filePath);
 
@@ -107,7 +103,6 @@ export async function createCacheKey(
 
 async function printableFiles(
   directory: string,
-  excludedPath: string | undefined,
 ): Promise<string[]> {
   const files: string[] = [];
 
@@ -126,9 +121,7 @@ async function printableFiles(
 
       const path = join(currentDirectory, entry.name);
 
-      if (resolve(path) !== excludedPath) {
-        files.push(path);
-      }
+      files.push(path);
     }
   }
 

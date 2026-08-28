@@ -1,5 +1,14 @@
-import { expect, test } from "bun:test";
-import { resolve } from "node:path";
+import { afterEach, expect, test } from "bun:test";
+import {
+  lstat,
+  mkdtemp,
+  readFile,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
@@ -7,32 +16,48 @@ import {
   VERSION,
   type CliServices,
 } from "../src/cli.js";
-import type { RenderToFileOptions } from "../src/render.js";
+import type { RenderOptions } from "../src/render.js";
 
 const fixtures = fileURLToPath(new URL("./fixtures/", import.meta.url));
+const encoder = new TextEncoder();
+const decoder = new TextDecoder();
+const pdf = encoder.encode("%PDF-1.7\nfake PDF\n");
+const temporaryDirectories: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(
+    temporaryDirectories.splice(0).map((directory) =>
+      rm(directory, { recursive: true, force: true }),
+    ),
+  );
+});
 
 async function run(
   args: readonly string[],
   services = defaultServices(),
+  isTTY = false,
 ): Promise<{
   code: number;
-  stdout: string;
+  stdout: Uint8Array;
   stderr: string;
 }> {
-  const stdout: string[] = [];
+  const stdout: Uint8Array[] = [];
   const stderr: string[] = [];
   const code = await runCli(
     args,
     {
-      stdout: { write: (value) => stdout.push(value) },
-      stderr: { write: (value) => stderr.push(value) },
+      stdout: {
+        isTTY,
+        write: (value) => stdout.push(toBytes(value)),
+      },
+      stderr: { write: (value) => stderr.push(String(value)) },
     },
     services,
   );
 
   return {
     code,
-    stdout: stdout.join(""),
+    stdout: joinBytes(stdout),
     stderr: stderr.join(""),
   };
 }
@@ -41,7 +66,7 @@ test("runCli shows help when called without arguments", async () => {
   const result = await run([]);
 
   expect(result.code).toBe(0);
-  expect(result.stdout).toMatch(/Usage:/u);
+  expect(text(result.stdout)).toMatch(/Usage:/u);
   expect(result.stderr).toBe("");
 });
 
@@ -49,15 +74,15 @@ test("runCli reports its version", async () => {
   const result = await run(["--version"]);
 
   expect(result.code).toBe(0);
-  expect(result.stdout).toBe(`${VERSION}\n`);
+  expect(text(result.stdout)).toBe(`${VERSION}\n`);
   expect(result.stderr).toBe("");
 });
 
-test("runCli rejects an unknown command", async () => {
+test("runCli reports an unknown command on stderr", async () => {
   const result = await run(["unknown"]);
 
   expect(result.code).toBe(2);
-  expect(result.stdout).toBe("");
+  expect(result.stdout).toEqual(new Uint8Array());
   expect(result.stderr).toMatch(/Unknown command: unknown/u);
 });
 
@@ -65,46 +90,67 @@ test("runCli shows render-specific help", async () => {
   const result = await run(["render", "--help"]);
 
   expect(result.code).toBe(0);
-  expect(result.stdout).toMatch(/--output <path>/u);
-  expect(result.stdout).toMatch(/--<key>=<value>/u);
-  expect(result.stdout).toMatch(/--name="John Doe"/u);
+  expect(text(result.stdout)).toMatch(/\[--output <pdf-path>\]/u);
+  expect(text(result.stdout)).toMatch(/--<key>=<value>/u);
+  expect(text(result.stdout)).toMatch(/--name="John Doe"/u);
   expect(result.stderr).toBe("");
 });
 
-test("runCli parses literal JSON and dispatches a render", async () => {
-  let received: RenderToFileOptions | undefined;
-  const services = defaultServices({
-    render: async (options) => {
-      received = options;
-      return { outputPath: options.outputPath, cacheHit: false };
-    },
-  });
+test("runCli writes raw PDF bytes to redirected stdout", async () => {
+  let received: RenderOptions | undefined;
   const result = await run([
     "render",
     `${fixtures}/minimal`,
-    "--output",
-    "out.pdf",
     "--data",
     '{"name":"Ada"}',
-  ], services);
+  ], defaultServices({
+    render: async (options) => {
+      received = options;
+      return pdf;
+    },
+  }));
 
   expect(result.code).toBe(0);
-  expect(result.stdout).toBe(`Wrote ${resolve("out.pdf")}\n`);
+  expect(result.stdout).toEqual(pdf);
   expect(result.stderr).toBe("");
   expect(received).toEqual({
     printableDirectory: resolve(`${fixtures}/minimal`),
-    outputPath: resolve("out.pdf"),
     input: { name: "Ada" },
-    force: false,
+  });
+});
+
+test("runCli writes PDF bytes to --output and keeps stdout empty", async () => {
+  const directory = await temporaryDirectory();
+  const outputPath = join(directory, "nested", "card.pdf");
+  let received: RenderOptions | undefined;
+  const result = await run([
+    "render",
+    `${fixtures}/minimal`,
+    `--output=${outputPath}`,
+    "--data",
+    '{"name":"Ada"}',
+  ], defaultServices({
+    render: async (options) => {
+      received = options;
+      return pdf;
+    },
+  }));
+
+  expect(result.code).toBe(0);
+  expect(result.stdout).toEqual(new Uint8Array());
+  expect(result.stderr).toBe(`Wrote ${outputPath}\n`);
+  expect(await readFile(outputPath)).toEqual(Buffer.from(pdf));
+  expect(received).toEqual({
+    printableDirectory: resolve(`${fixtures}/minimal`),
+    input: { name: "Ada" },
   });
 });
 
 test("runCli parses direct string input fields", async () => {
-  let received: RenderToFileOptions | undefined;
+  let received: RenderOptions | undefined;
   const result = await run([
     "render",
     `${fixtures}/minimal`,
-    "--output=out.pdf",
     "--name=John Doe",
     "--referenceId=ABC-123",
     "--note=contains=equals",
@@ -112,11 +158,12 @@ test("runCli parses direct string input fields", async () => {
   ], defaultServices({
     render: async (options) => {
       received = options;
-      return { outputPath: options.outputPath, cacheHit: false };
+      return pdf;
     },
   }));
 
   expect(result.code).toBe(0);
+  expect(result.stdout).toEqual(pdf);
   expect(received?.input).toEqual({
     name: "John Doe",
     referenceId: "ABC-123",
@@ -126,19 +173,17 @@ test("runCli parses direct string input fields", async () => {
 });
 
 test("runCli reads JSON input from stdin", async () => {
-  let received: RenderToFileOptions | undefined;
+  let received: RenderOptions | undefined;
   const result = await run([
     "render",
     `${fixtures}/minimal`,
-    "-o",
-    "out.pdf",
     "--input",
     "-",
   ], defaultServices({
     readStdin: async () => '{"name":"Ada"}',
     render: async (options) => {
       received = options;
-      return { outputPath: options.outputPath, cacheHit: false };
+      return pdf;
     },
   }));
 
@@ -147,13 +192,11 @@ test("runCli reads JSON input from stdin", async () => {
 });
 
 test("runCli reads JSON input from a file", async () => {
-  let received: RenderToFileOptions | undefined;
+  let received: RenderOptions | undefined;
   let requestedPath: string | undefined;
   const result = await run([
     "render",
     `${fixtures}/minimal`,
-    "-o",
-    "out.pdf",
     "--input",
     "input.json",
   ], defaultServices({
@@ -163,7 +206,7 @@ test("runCli reads JSON input from a file", async () => {
     },
     render: async (options) => {
       received = options;
-      return { outputPath: options.outputPath, cacheHit: false };
+      return pdf;
     },
   }));
 
@@ -172,40 +215,41 @@ test("runCli reads JSON input from a file", async () => {
   expect(received?.input).toEqual({ name: "Ada" });
 });
 
-test("runCli defaults data to an empty object and forwards force", async () => {
-  let received: RenderToFileOptions | undefined;
+test("runCli defaults data to an empty object and keeps force at the output edge", async () => {
+  const directory = await temporaryDirectory();
+  const outputPath = join(directory, "out.pdf");
+  let received: RenderOptions | undefined;
   const result = await run([
     "render",
     `${fixtures}/minimal`,
     "-o",
-    "out.pdf",
+    outputPath,
     "--force",
   ], defaultServices({
     render: async (options) => {
       received = options;
-      return { outputPath: options.outputPath, cacheHit: false };
+      return pdf;
     },
   }));
 
   expect(result.code).toBe(0);
-  expect(received?.input).toEqual({});
-  expect(received?.force).toBe(true);
+  expect(received).toEqual({
+    printableDirectory: resolve(`${fixtures}/minimal`),
+    input: {},
+  });
+  expect(await readFile(outputPath)).toEqual(Buffer.from(pdf));
 });
 
 test("runCli rejects invalid or conflicting render input", async () => {
   const invalid = await run([
     "render",
     `${fixtures}/minimal`,
-    "-o",
-    "out.pdf",
     "--data",
     "not-json",
   ]);
   const conflicting = await run([
     "render",
     `${fixtures}/minimal`,
-    "-o",
-    "out.pdf",
     "--data",
     "{}",
     "--input",
@@ -214,8 +258,6 @@ test("runCli rejects invalid or conflicting render input", async () => {
   const directDataConflict = await run([
     "render",
     `${fixtures}/minimal`,
-    "-o",
-    "out.pdf",
     "--name=Ada",
     "--data",
     "{}",
@@ -223,8 +265,6 @@ test("runCli rejects invalid or conflicting render input", async () => {
   const directInputConflict = await run([
     "render",
     `${fixtures}/minimal`,
-    "-o",
-    "out.pdf",
     "--name=Ada",
     "--input",
     "input.json",
@@ -240,7 +280,7 @@ test("runCli rejects invalid or conflicting render input", async () => {
   expect(directInputConflict.stderr).toMatch(/cannot be used with --data or --input/u);
 });
 
-test("runCli rejects missing option values and render options", async () => {
+test("runCli rejects missing option values and invalid render options", async () => {
   const missingOutputValue = await run([
     "render",
     `${fixtures}/minimal`,
@@ -250,34 +290,30 @@ test("runCli rejects missing option values and render options", async () => {
   const missingInputValue = await run([
     "render",
     `${fixtures}/minimal`,
-    "-o",
-    "out.pdf",
     "--input",
     "--force",
   ]);
   const unknownOption = await run([
     "render",
     `${fixtures}/minimal`,
-    "-o",
-    "out.pdf",
     "--unknown",
   ]);
   const bareDirectInput = await run([
     "render",
     `${fixtures}/minimal`,
-    "-o",
-    "out.pdf",
     "--name",
   ]);
   const duplicateDirectInput = await run([
     "render",
     `${fixtures}/minimal`,
-    "-o",
-    "out.pdf",
     "--name=Ada",
     "--name=Grace",
   ]);
-  const missingOutput = await run(["render", `${fixtures}/minimal`]);
+  const forceWithoutOutput = await run([
+    "render",
+    `${fixtures}/minimal`,
+    "--force",
+  ]);
 
   expect(missingOutputValue.code).toBe(2);
   expect(missingOutputValue.stderr).toMatch(/-o requires a value/u);
@@ -289,30 +325,26 @@ test("runCli rejects missing option values and render options", async () => {
   expect(bareDirectInput.stderr).toMatch(/--key=value/u);
   expect(duplicateDirectInput.code).toBe(2);
   expect(duplicateDirectInput.stderr).toMatch(/--name may only be provided once/u);
-  expect(missingOutput.code).toBe(2);
-  expect(missingOutput.stderr).toMatch(/requires -o or --output/u);
+  expect(forceWithoutOutput.code).toBe(2);
+  expect(forceWithoutOutput.stderr).toMatch(/--force requires --output/u);
 });
 
 test("runCli accepts negative JSON values and reports input read failures", async () => {
-  let received: RenderToFileOptions | undefined;
+  let received: RenderOptions | undefined;
   const negativeJson = await run([
     "render",
     `${fixtures}/minimal`,
-    "-o",
-    "out.pdf",
     "--data",
     "-1",
   ], defaultServices({
     render: async (options) => {
       received = options;
-      return { outputPath: options.outputPath, cacheHit: false };
+      return pdf;
     },
   }));
   const unreadable = await run([
     "render",
     `${fixtures}/minimal`,
-    "-o",
-    "out.pdf",
     "--input",
     "missing.json",
   ], defaultServices({
@@ -324,16 +356,156 @@ test("runCli accepts negative JSON values and reports input read failures", asyn
   expect(negativeJson.code).toBe(0);
   expect(received?.input).toBe(-1);
   expect(unreadable.code).toBe(1);
+  expect(unreadable.stdout).toEqual(new Uint8Array());
   expect(unreadable.stderr).toMatch(/Could not read JSON input/u);
+});
+
+test("runCli refuses PDF output to an interactive terminal", async () => {
+  let renderCount = 0;
+  const result = await run([
+    "render",
+    `${fixtures}/minimal`,
+  ], defaultServices({
+    render: async () => {
+      renderCount += 1;
+      return pdf;
+    },
+  }), true);
+
+  expect(result.code).toBe(2);
+  expect(result.stdout).toEqual(new Uint8Array());
+  expect(result.stderr).toBe(
+    "print-page: PDF output requires --output <path> or redirected stdout.\n",
+  );
+  expect(renderCount).toBe(0);
+});
+
+test("runCli preserves output overwrite protection", async () => {
+  const directory = await temporaryDirectory();
+  const outputPath = join(directory, "existing.pdf");
+  let renderCount = 0;
+  await writeFile(outputPath, "old PDF");
+  const services = defaultServices({
+    render: async () => {
+      renderCount += 1;
+      return pdf;
+    },
+  });
+
+  const refused = await run([
+    "render",
+    `${fixtures}/minimal`,
+    "--output",
+    outputPath,
+  ], services);
+  const replaced = await run([
+    "render",
+    `${fixtures}/minimal`,
+    "--output",
+    outputPath,
+    "--force",
+  ], services);
+
+  expect(refused.code).toBe(1);
+  expect(refused.stdout).toEqual(new Uint8Array());
+  expect(refused.stderr).toMatch(/already exists; use --force/u);
+  expect(renderCount).toBe(1);
+  expect(replaced.code).toBe(0);
+  expect(replaced.stdout).toEqual(new Uint8Array());
+  expect(await readFile(outputPath)).toEqual(Buffer.from(pdf));
+});
+
+test.skipIf(process.platform === "win32")(
+  "runCli does not follow a dangling output symlink without force",
+  async () => {
+    const directory = await temporaryDirectory();
+    const targetPath = join(directory, "target.pdf");
+    const outputPath = join(directory, "output.pdf");
+    await symlink(targetPath, outputPath);
+    const services = defaultServices({ render: async () => pdf });
+
+    const refused = await run([
+      "render",
+      `${fixtures}/minimal`,
+      "--output",
+      outputPath,
+    ], services);
+    expect(refused.code).toBe(1);
+    expect(await Bun.file(targetPath).exists()).toBe(false);
+    expect((await lstat(outputPath)).isSymbolicLink()).toBe(true);
+
+    const replaced = await run([
+      "render",
+      `${fixtures}/minimal`,
+      "--output",
+      outputPath,
+      "--force",
+    ], services);
+
+    expect(replaced.code).toBe(0);
+    expect((await lstat(outputPath)).isSymbolicLink()).toBe(false);
+    expect(await Bun.file(targetPath).exists()).toBe(false);
+    expect(await readFile(outputPath)).toEqual(Buffer.from(pdf));
+  },
+);
+
+test("runCli sends render failures to stderr without emitting PDF bytes", async () => {
+  const directory = await temporaryDirectory();
+  const outputPath = join(directory, "failed.pdf");
+  const result = await run([
+    "render",
+    `${fixtures}/minimal`,
+    "--output",
+    outputPath,
+  ], defaultServices({
+    render: async () => {
+      throw new Error("browser failed");
+    },
+  }));
+
+  expect(result.code).toBe(1);
+  expect(result.stdout).toEqual(new Uint8Array());
+  expect(result.stderr).toMatch(/browser failed/u);
+  expect(await Bun.file(outputPath).exists()).toBe(false);
 });
 
 function defaultServices(
   overrides: Partial<CliServices> = {},
 ): CliServices {
   return {
-    render: async (options) => ({ outputPath: options.outputPath, cacheHit: false }),
+    render: async () => pdf,
     readInputFile: async () => "{}",
     readStdin: async () => "{}",
     ...overrides,
   };
+}
+
+function toBytes(value: string | Uint8Array): Uint8Array {
+  return typeof value === "string"
+    ? encoder.encode(value)
+    : new Uint8Array(value);
+}
+
+function joinBytes(chunks: readonly Uint8Array[]): Uint8Array {
+  const bytes = new Uint8Array(
+    chunks.reduce((total, chunk) => total + chunk.byteLength, 0),
+  );
+  let offset = 0;
+
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+
+  return bytes;
+}
+
+function text(bytes: Uint8Array): string {
+  return decoder.decode(bytes);
+}
+
+async function temporaryDirectory(): Promise<string> {
+  const directory = await mkdtemp(join(tmpdir(), "print-page-cli-"));
+  temporaryDirectories.push(directory);
+  return directory;
 }

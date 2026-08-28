@@ -1,3 +1,3 @@
 export interface PrintBackend {
-  print(pdfPath: string): Promise<void>;
+  print(pdf: Uint8Array): Promise<void>;
 }

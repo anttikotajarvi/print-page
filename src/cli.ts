@@ -1,10 +1,15 @@
-import { resolve } from "node:path";
-
 import {
-  renderToFile,
-  type RenderResult,
-  type RenderToFileOptions,
-} from "./render.js";
+  link,
+  lstat,
+  mkdir,
+  mkdtemp,
+  rename,
+  rm,
+} from "node:fs/promises";
+import { dirname, join, resolve } from "node:path";
+
+import { PrintPageError } from "./errors.js";
+import { render, type RenderOptions } from "./render.js";
 import { VERSION } from "./version.js";
 
 export { VERSION } from "./version.js";
@@ -14,7 +19,7 @@ const HELP = `print-page ${VERSION}
 Render HTML-based printables with Chromium.
 
 Usage:
-  print-page render <printable-directory> --output <pdf-path> [options]
+  print-page render <printable-directory> [--output <pdf-path>] [options]
 
 Commands:
   render  Render a printable to PDF
@@ -27,14 +32,14 @@ Run "print-page render --help" for render options.
 `;
 
 const RENDER_HELP = `Usage:
-  print-page render <printable-directory> --output <pdf-path> [options]
+  print-page render <printable-directory> [--output <pdf-path>] [options]
 
 Options:
-  -o, --output <path>  Required PDF output path
+  -o, --output <path>  Write the PDF to this path
   --<key>=<value>      Simple string input field; repeat as needed
   -d, --data <json>    Literal JSON input
   -i, --input <path>   JSON input file; use - to read stdin
-  -f, --force          Replace an existing output file
+  -f, --force          Replace an existing output file (requires --output)
   -h, --help           Show this help
 
 Choose one input form: --key=value fields, --data, or --input. Direct fields
@@ -43,8 +48,10 @@ printable receives {}.
 
 Example:
   print-page render ./label -o ./label.pdf --name="John Doe"
+  print-page render ./label --name="John Doe" > ./label.pdf
 
-Page size and margins are controlled by printable CSS.
+Without --output, stdout must be redirected or piped. Page size and margins
+are controlled by printable CSS.
 `;
 
 const RENDER_OPTIONS = new Set([
@@ -66,18 +73,19 @@ export interface CliIo {
 }
 
 export interface CliWriter {
-  write(value: string): unknown;
+  isTTY?: boolean;
+  write(value: string | Uint8Array): unknown;
 }
 
 export interface CliServices {
-  render(options: RenderToFileOptions): Promise<RenderResult>;
+  render(options: RenderOptions): Promise<Uint8Array>;
   readInputFile(path: string): Promise<string>;
   readStdin(): Promise<string>;
 }
 
 interface RenderArguments {
   printableDirectory: string;
-  outputPath: string;
+  outputPath?: string;
   data?: string;
   inputPath?: string;
   directInput?: Record<string, string>;
@@ -92,7 +100,7 @@ class CliUsageError extends Error {
 }
 
 const defaultServices: CliServices = {
-  render: renderToFile,
+  render,
   readInputFile: async (path) => Bun.file(path).text(),
   readStdin: async () => new Response(Bun.stdin).text(),
 };
@@ -123,15 +131,34 @@ export async function runCli(
     }
 
     const renderArguments = parseRenderArguments(args.slice(1));
+
+    if (renderArguments.outputPath === undefined && io.stdout.isTTY) {
+      throw new CliUsageError(
+        "PDF output requires --output <path> or redirected stdout.",
+      );
+    }
+
     const input = await loadInput(renderArguments, services);
-    const result = await services.render({
+    const outputPath = renderArguments.outputPath === undefined
+      ? undefined
+      : resolve(renderArguments.outputPath);
+
+    if (outputPath !== undefined) {
+      await ensureOutputAvailable(outputPath, renderArguments.force);
+    }
+
+    const pdf = await services.render({
       printableDirectory: resolve(renderArguments.printableDirectory),
-      outputPath: resolve(renderArguments.outputPath),
       input,
-      force: renderArguments.force,
     });
 
-    io.stdout.write(`Wrote ${result.outputPath}\n`);
+    if (outputPath === undefined) {
+      io.stdout.write(pdf);
+    } else {
+      await writeOutput(outputPath, pdf, renderArguments.force);
+      io.stderr.write(`Wrote ${outputPath}\n`);
+    }
+
     return 0;
   } catch (error) {
     io.stderr.write(`print-page: ${describeError(error)}\n`);
@@ -238,8 +265,8 @@ function parseRenderArguments(args: readonly string[]): RenderArguments {
     throw new CliUsageError("render requires a printable directory.");
   }
 
-  if (outputPath === undefined) {
-    throw new CliUsageError("render requires -o or --output.");
+  if (force && outputPath === undefined) {
+    throw new CliUsageError("--force requires --output.");
   }
 
   if (data !== undefined && inputPath !== undefined) {
@@ -254,7 +281,7 @@ function parseRenderArguments(args: readonly string[]): RenderArguments {
 
   return {
     printableDirectory,
-    outputPath,
+    ...(outputPath === undefined ? {} : { outputPath }),
     ...(data === undefined ? {} : { data }),
     ...(inputPath === undefined ? {} : { inputPath }),
     ...(directInput.size === 0
@@ -351,4 +378,107 @@ function setOnce(
 
 function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+async function ensureOutputAvailable(
+  outputPath: string,
+  force: boolean,
+): Promise<void> {
+  try {
+    const details = await lstat(outputPath);
+
+    if (details.isDirectory()) {
+      throw new PrintPageError(
+        "INVALID_PATH",
+        `Output path ${outputPath} is a directory.`,
+      );
+    }
+  } catch (error) {
+    if (error instanceof PrintPageError) {
+      throw error;
+    }
+
+    if (isMissingPath(error)) {
+      return;
+    }
+
+    throw new PrintPageError(
+      "INVALID_PATH",
+      `Could not inspect output path ${outputPath}.`,
+      { cause: error },
+    );
+  }
+
+  if (!force) {
+    throw new PrintPageError(
+      "OUTPUT_EXISTS",
+      `Output file ${outputPath} already exists; use --force to replace it.`,
+    );
+  }
+}
+
+async function writeOutput(
+  path: string,
+  pdf: Uint8Array,
+  force: boolean,
+): Promise<void> {
+  let temporaryDirectory: string | undefined;
+
+  try {
+    const outputDirectory = dirname(path);
+    await mkdir(outputDirectory, { recursive: true });
+    temporaryDirectory = await mkdtemp(join(outputDirectory, ".print-page-"));
+    const temporaryPath = join(temporaryDirectory, "output.pdf");
+
+    await Bun.write(temporaryPath, pdf);
+
+    if (force) {
+      await rename(temporaryPath, path);
+      return;
+    }
+
+    try {
+      await link(temporaryPath, path);
+    } catch (error) {
+      if (isExistingPath(error)) {
+        throw new PrintPageError(
+          "OUTPUT_EXISTS",
+          `Output file ${path} already exists; use --force to replace it.`,
+          { cause: error },
+        );
+      }
+
+      throw error;
+    }
+  } catch (error) {
+    if (error instanceof PrintPageError) {
+      throw error;
+    }
+
+    throw new PrintPageError(
+      "RENDER_FAILED",
+      `Could not write PDF to ${path}.`,
+      { cause: error },
+    );
+  } finally {
+    if (temporaryDirectory !== undefined) {
+      await rm(temporaryDirectory, { recursive: true, force: true }).catch(
+        () => undefined,
+      );
+    }
+  }
+}
+
+function isMissingPath(error: unknown): error is { code: string } {
+  return typeof error === "object"
+    && error !== null
+    && "code" in error
+    && (error as { code?: unknown }).code === "ENOENT";
+}
+
+function isExistingPath(error: unknown): error is { code: string } {
+  return typeof error === "object"
+    && error !== null
+    && "code" in error
+    && (error as { code?: unknown }).code === "EEXIST";
 }

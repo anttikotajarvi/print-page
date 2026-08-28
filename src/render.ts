@@ -1,13 +1,5 @@
-import {
-  link,
-  lstat,
-  mkdir,
-  mkdtemp,
-  rename,
-  rm,
-  stat,
-} from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
+import { stat } from "node:fs/promises";
+import { resolve } from "node:path";
 
 import { chromium, type LaunchOptions } from "playwright";
 
@@ -36,31 +28,20 @@ export interface RenderRequest {
   data: unknown;
 }
 
-export interface RenderedPdf {
-  bytes: Uint8Array;
-}
-
 /**
  * Browser lifecycle implementations live behind this boundary so that HTML
  * rendering stays independent from output naming, caching, and host printing.
  */
 export interface PdfRenderer {
-  render(request: RenderRequest): Promise<RenderedPdf>;
+  render(request: RenderRequest): Promise<Uint8Array>;
 }
 
-export interface RenderToFileOptions {
+export interface RenderOptions {
   printableDirectory: string;
   input: unknown;
-  outputPath: string;
-  force?: boolean;
   renderer?: PdfRenderer;
   cache?: RenderCache;
   useCache?: boolean;
-}
-
-export interface RenderResult {
-  outputPath: string;
-  cacheHit: boolean;
 }
 
 export interface PlaywrightPdfRendererOptions {
@@ -70,7 +51,7 @@ export interface PlaywrightPdfRendererOptions {
 export class PlaywrightPdfRenderer implements PdfRenderer {
   constructor(private readonly options: PlaywrightPdfRendererOptions = {}) {}
 
-  async render(request: RenderRequest): Promise<RenderedPdf> {
+  async render(request: RenderRequest): Promise<Uint8Array> {
     let browser;
 
     try {
@@ -165,13 +146,11 @@ export class PlaywrightPdfRenderer implements PdfRenderer {
 
         await page.emulateMedia({ media: "print" });
 
-        return {
-          bytes: new Uint8Array(await page.pdf({
-            format: "A4",
-            preferCSSPageSize: true,
-            printBackground: true,
-          })),
-        };
+        return new Uint8Array(await page.pdf({
+          format: "A4",
+          preferCSSPageSize: true,
+          printBackground: true,
+        }));
       } finally {
         await context.close().catch(() => undefined);
       }
@@ -191,13 +170,9 @@ export class PlaywrightPdfRenderer implements PdfRenderer {
   }
 }
 
-export async function renderToFile(
-  options: RenderToFileOptions,
-): Promise<RenderResult> {
+/** Renders a printable to PDF bytes for the caller to deliver or store. */
+export async function render(options: RenderOptions): Promise<Uint8Array> {
   const printableDirectory = await requireDirectory(options.printableDirectory);
-  const outputPath = resolve(options.outputPath);
-
-  await ensureOutputAvailable(outputPath, options.force ?? false);
 
   const settings = await loadSettings(printableDirectory);
   const shouldUseCache = options.useCache ?? settings.useCache;
@@ -212,7 +187,6 @@ export async function renderToFile(
       cacheKey = await createCacheKey({
         printableDirectory,
         input: options.input,
-        outputPath,
         rendererVersion: VERSION,
         settings,
       });
@@ -224,32 +198,29 @@ export async function renderToFile(
   }
 
   if (isPdf(cachedPdf)) {
-    await writeOutput(outputPath, cachedPdf, options.force ?? false);
-    return { outputPath, cacheHit: true };
+    return cachedPdf;
   }
 
   const data = await prepareInput(printableDirectory, options.input);
   const renderer = options.renderer ?? new PlaywrightPdfRenderer();
-  const rendered = await renderer.render({
+  const pdf = await renderer.render({
     printableDirectory,
     settings,
     data,
   });
 
-  if (!isPdf(rendered.bytes)) {
+  if (!isPdf(pdf)) {
     throw new PrintPageError(
       "RENDER_FAILED",
       "Renderer did not return a PDF.",
     );
   }
 
-  await writeOutput(outputPath, rendered.bytes, options.force ?? false);
-
   if (cache !== undefined && cacheKey !== undefined) {
-    await cache.write(cacheKey, rendered.bytes).catch(() => undefined);
+    await cache.write(cacheKey, pdf).catch(() => undefined);
   }
 
-  return { outputPath, cacheHit: false };
+  return pdf;
 }
 
 async function requireDirectory(path: string): Promise<string> {
@@ -279,95 +250,6 @@ async function requireDirectory(path: string): Promise<string> {
   return directory;
 }
 
-async function ensureOutputAvailable(
-  outputPath: string,
-  force: boolean,
-): Promise<void> {
-  try {
-    const details = await lstat(outputPath);
-
-    if (details.isDirectory()) {
-      throw new PrintPageError(
-        "INVALID_PATH",
-        `Output path ${outputPath} is a directory.`,
-      );
-    }
-  } catch (error) {
-    if (error instanceof PrintPageError) {
-      throw error;
-    }
-
-    if (isMissingPath(error)) {
-      return;
-    }
-
-    throw new PrintPageError(
-      "INVALID_PATH",
-      `Could not inspect output path ${outputPath}.`,
-      { cause: error },
-    );
-  }
-
-  if (!force) {
-    throw new PrintPageError(
-      "OUTPUT_EXISTS",
-      `Output file ${outputPath} already exists; use --force to replace it.`,
-    );
-  }
-}
-
-async function writeOutput(
-  path: string,
-  pdf: Uint8Array,
-  force: boolean,
-): Promise<void> {
-  let temporaryDirectory: string | undefined;
-
-  try {
-    const outputDirectory = dirname(path);
-    await mkdir(outputDirectory, { recursive: true });
-    temporaryDirectory = await mkdtemp(join(outputDirectory, ".print-page-"));
-    const temporaryPath = join(temporaryDirectory, "output.pdf");
-
-    await Bun.write(temporaryPath, pdf);
-
-    if (force) {
-      await rename(temporaryPath, path);
-      return;
-    }
-
-    try {
-      await link(temporaryPath, path);
-    } catch (error) {
-      if (isExistingPath(error)) {
-        throw new PrintPageError(
-          "OUTPUT_EXISTS",
-          `Output file ${path} already exists; use --force to replace it.`,
-          { cause: error },
-        );
-      }
-
-      throw error;
-    }
-  } catch (error) {
-    if (error instanceof PrintPageError) {
-      throw error;
-    }
-
-    throw new PrintPageError(
-      "RENDER_FAILED",
-      `Could not write PDF to ${path}.`,
-      { cause: error },
-    );
-  } finally {
-    if (temporaryDirectory !== undefined) {
-      await rm(temporaryDirectory, { recursive: true, force: true }).catch(
-        () => undefined,
-      );
-    }
-  }
-}
-
 function remainingTime(deadline: number): number {
   const remaining = deadline - Date.now();
 
@@ -380,20 +262,6 @@ function remainingTime(deadline: number): number {
 
 function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-function isMissingPath(error: unknown): error is { code: string } {
-  return typeof error === "object"
-    && error !== null
-    && "code" in error
-    && (error as { code?: unknown }).code === "ENOENT";
-}
-
-function isExistingPath(error: unknown): error is { code: string } {
-  return typeof error === "object"
-    && error !== null
-    && "code" in error
-    && (error as { code?: unknown }).code === "EEXIST";
 }
 
 function isPdf(bytes: unknown): bytes is Uint8Array {
