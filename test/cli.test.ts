@@ -106,8 +106,62 @@ test("runCli shows help for the default command and accepts the legacy alias", a
   expect(text(result.stdout)).toMatch(/--<key>=<value>/u);
   expect(text(result.stdout)).toMatch(/--preset <name>/u);
   expect(text(result.stdout)).toMatch(/--name="John Doe"/u);
+  expect(text(result.stdout)).toMatch(/print-page inspect <printable-directory>/u);
   expect(result.stderr).toBe("");
   expect(legacyResult).toEqual(result);
+});
+
+test("runCli starts inspect with the parsed input and prints its preview URL", async () => {
+  let received: { printableDirectory: string; input: unknown } | undefined;
+  let closed = false;
+  const result = await run([
+    "inspect",
+    `${fixtures}/minimal`,
+    "--preset",
+    "repair-kit",
+    "--name=Custom kit",
+  ], defaultServices({
+    readInputFile: async () => '{"name":"Preset kit","quantity":4}',
+    startInspectServer: async (options) => {
+      received = options;
+      return {
+        url: "http://127.0.0.1:43821/index.html",
+        close: async () => {
+          closed = true;
+        },
+      };
+    },
+  }));
+
+  expect(result.code).toBe(0);
+  expect(text(result.stdout)).toBe(
+    "Preview: http://127.0.0.1:43821/index.html\n",
+  );
+  expect(result.stderr).toBe("");
+  expect(received).toEqual({
+    printableDirectory: resolve(`${fixtures}/minimal`),
+    input: { name: "Custom kit", quantity: 4 },
+  });
+  expect(closed).toBeTrue();
+});
+
+test("runCli treats ./inspect as a printable directory instead of a command", async () => {
+  let received: RenderOptions | undefined;
+  const result = await run(["./inspect"], defaultServices({
+    render: async (options) => {
+      received = options;
+      return pdf;
+    },
+    startInspectServer: async () => {
+      throw new Error("inspect command should not run");
+    },
+  }));
+
+  expect(result.code).toBe(0);
+  expect(received).toEqual({
+    printableDirectory: resolve("./inspect"),
+    input: {},
+  });
 });
 
 test("runCli writes raw PDF bytes to redirected stdout", async () => {
@@ -775,8 +829,13 @@ function defaultServices(
 ): CliServices {
   return {
     render: async () => pdf,
+    startInspectServer: async () => ({
+      url: "http://127.0.0.1:43821/index.html",
+      close: async () => undefined,
+    }),
     readInputFile: async () => "{}",
     readStdin: async () => "{}",
+    waitForTermination: async () => undefined,
     ...overrides,
   };
 }

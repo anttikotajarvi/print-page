@@ -9,6 +9,11 @@ import {
 import { dirname, join, resolve } from "node:path";
 
 import { PrintPageError } from "./errors.js";
+import {
+  startInspectServer,
+  type InspectOptions,
+  type InspectServer,
+} from "./inspect.js";
 import { resolveWithinDirectory } from "./paths.js";
 import { render, type RenderOptions } from "./render.js";
 import { VERSION } from "./version.js";
@@ -21,6 +26,7 @@ Render HTML-based printables with Chromium.
 
 Usage:
   print-page <printable-directory> [--output <pdf-path>] [options]
+  print-page inspect <printable-directory> [options]
 
 Options:
   -o, --output <path>  Write the PDF to this path
@@ -40,6 +46,7 @@ option or preset, the printable receives {}.
 Example:
   print-page ./label -o ./label.pdf --name="John Doe"
   print-page ./label --name="John Doe" > ./label.pdf
+  print-page inspect ./label --name="John Doe"
 
 Without --output, stdout must be redirected or piped. Page size and margins
 are controlled by printable CSS.
@@ -71,8 +78,10 @@ export interface CliWriter {
 
 export interface CliServices {
   render(options: RenderOptions): Promise<Uint8Array>;
+  startInspectServer(options: InspectOptions): Promise<InspectServer>;
   readInputFile(path: string): Promise<string>;
   readStdin(): Promise<string>;
+  waitForTermination(): Promise<void>;
 }
 
 interface RenderArguments {
@@ -94,8 +103,10 @@ class CliUsageError extends Error {
 
 const defaultServices: CliServices = {
   render,
+  startInspectServer,
   readInputFile: async (path) => Bun.file(path).text(),
   readStdin: async () => new Response(Bun.stdin).text(),
+  waitForTermination,
 };
 
 export async function runCli(
@@ -114,22 +125,23 @@ export async function runCli(
       return 0;
     }
 
-    // Keep the former command form working while rendering directly by
-    // default. This lets callers simplify to `print-page <directory>` without
-    // breaking existing scripts that still use `print-page render <directory>`.
-    const renderArgs = args[0] === "render" ? args.slice(1) : args;
+    // Command names are only recognized in the first position. A printable
+    // directory named "inspect" remains addressable as ./inspect.
+    const command = args[0] === "inspect" ? "inspect" : "render";
+    // Keep the former render command accepted without making it mandatory.
+    const commandArgs = args[0] === "inspect" || args[0] === "render"
+      ? args.slice(1)
+      : args;
 
-    if (renderArgs.includes("--help") || renderArgs.includes("-h")) {
+    if (commandArgs.includes("--help") || commandArgs.includes("-h")) {
       io.stdout.write(HELP);
       return 0;
     }
 
-    const renderArguments = parseRenderArguments(renderArgs);
+    const renderArguments = parseRenderArguments(commandArgs);
 
-    if (renderArguments.outputPath === undefined && io.stdout.isTTY) {
-      throw new CliUsageError(
-        "PDF output requires --output <path> or redirected stdout.",
-      );
+    if (command === "inspect" && renderArguments.outputPath !== undefined) {
+      throw new CliUsageError("--output is only available while rendering.");
     }
 
     const printableDirectory = resolve(renderArguments.printableDirectory);
@@ -138,6 +150,29 @@ export async function runCli(
       printableDirectory,
       services,
     );
+
+    if (command === "inspect") {
+      const server = await services.startInspectServer({
+        printableDirectory,
+        input,
+      });
+
+      try {
+        io.stdout.write(`Preview: ${server.url}\n`);
+        await services.waitForTermination();
+      } finally {
+        await server.close();
+      }
+
+      return 0;
+    }
+
+    if (renderArguments.outputPath === undefined && io.stdout.isTTY) {
+      throw new CliUsageError(
+        "PDF output requires --output <path> or redirected stdout.",
+      );
+    }
+
     const outputPath = renderArguments.outputPath === undefined
       ? undefined
       : resolve(renderArguments.outputPath);
@@ -163,6 +198,19 @@ export async function runCli(
     io.stderr.write(`print-page: ${describeError(error)}\n`);
     return error instanceof CliUsageError ? 2 : 1;
   }
+}
+
+function waitForTermination(): Promise<void> {
+  return new Promise((resolveTermination) => {
+    const finish = () => {
+      process.off("SIGINT", finish);
+      process.off("SIGTERM", finish);
+      resolveTermination();
+    };
+
+    process.once("SIGINT", finish);
+    process.once("SIGTERM", finish);
+  });
 }
 
 function parseRenderArguments(args: readonly string[]): RenderArguments {

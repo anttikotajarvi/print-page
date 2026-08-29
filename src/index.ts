@@ -1,6 +1,7 @@
 export * from "./cache.js";
 export * from "./errors.js";
 export * from "./inject.js";
+export * from "./inspect.js";
 export * from "./paths.js";
 export * from "./prepare.js";
 export * from "./print.js";

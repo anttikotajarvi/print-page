@@ -45,6 +45,22 @@ export interface RenderOptions {
   useCache?: boolean;
 }
 
+export interface PreparedRenderPrintable {
+  /** The directory exposed as the printable's resource root. */
+  printableDirectory: string;
+  settings: PrintableSettings;
+  data: unknown;
+  /** Whether Vite-style /assets URLs resolve beside a nested entry point. */
+  useEntryAssetAlias: boolean;
+}
+
+interface PrintableConfiguration {
+  sourceDirectory: string;
+  printableDirectory: string;
+  settings: PrintableSettings;
+  useEntryAssetAlias: boolean;
+}
+
 export interface PlaywrightPdfRendererOptions {
   launchOptions?: LaunchOptions;
 }
@@ -176,15 +192,10 @@ export class PlaywrightPdfRenderer implements PdfRenderer {
 
 /** Renders a printable to PDF bytes for the caller to deliver or store. */
 export async function render(options: RenderOptions): Promise<Uint8Array> {
-  const printableDirectory = await requireDirectory(options.printableDirectory);
-
-  const settings = await loadSettings(printableDirectory);
-  const resourceRoot = await requireDirectory(
-    resolve(printableDirectory, settings.root),
-    "Printable root",
+  const configuration = await loadPrintableConfiguration(
+    options.printableDirectory,
   );
-  const useEntryAssetAlias = resourceRoot === printableDirectory;
-  const shouldUseCache = options.useCache ?? settings.useCache;
+  const shouldUseCache = options.useCache ?? configuration.settings.useCache;
   const cache = shouldUseCache
     ? options.cache ?? new FileRenderCache()
     : undefined;
@@ -194,10 +205,10 @@ export async function render(options: RenderOptions): Promise<Uint8Array> {
   if (cache !== undefined) {
     try {
       cacheKey = await createCacheKey({
-        printableDirectory: resourceRoot,
+        printableDirectory: configuration.printableDirectory,
         input: options.input,
         rendererVersion: VERSION,
-        settings,
+        settings: configuration.settings,
       });
       cachedPdf = await cache.read(cacheKey);
     } catch {
@@ -210,13 +221,13 @@ export async function render(options: RenderOptions): Promise<Uint8Array> {
     return cachedPdf;
   }
 
-  const data = await prepareInput(printableDirectory, options.input);
+  const prepared = await prepareConfiguredPrintable(configuration, options.input);
   const renderer = options.renderer ?? new PlaywrightPdfRenderer();
   const pdf = await renderer.render({
-    printableDirectory: resourceRoot,
-    settings,
-    data,
-    useEntryAssetAlias,
+    printableDirectory: prepared.printableDirectory,
+    settings: prepared.settings,
+    data: prepared.data,
+    useEntryAssetAlias: prepared.useEntryAssetAlias,
   });
 
   if (!isPdf(pdf)) {
@@ -231,6 +242,50 @@ export async function render(options: RenderOptions): Promise<Uint8Array> {
   }
 
   return pdf;
+}
+
+/**
+ * Loads a printable through the same settings, root-resolution, and input
+ * preparation path used by rendering, without launching Chromium.
+ */
+export async function preparePrintable(
+  options: Pick<RenderOptions, "printableDirectory" | "input">,
+): Promise<PreparedRenderPrintable> {
+  const configuration = await loadPrintableConfiguration(
+    options.printableDirectory,
+  );
+
+  return prepareConfiguredPrintable(configuration, options.input);
+}
+
+async function loadPrintableConfiguration(
+  printableDirectory: string,
+): Promise<PrintableConfiguration> {
+  const sourceDirectory = await requireDirectory(printableDirectory);
+  const settings = await loadSettings(sourceDirectory);
+  const resourceRoot = await requireDirectory(
+    resolve(sourceDirectory, settings.root),
+    "Printable root",
+  );
+
+  return {
+    sourceDirectory,
+    printableDirectory: resourceRoot,
+    settings,
+    useEntryAssetAlias: resourceRoot === sourceDirectory,
+  };
+}
+
+async function prepareConfiguredPrintable(
+  configuration: PrintableConfiguration,
+  input: unknown,
+): Promise<PreparedRenderPrintable> {
+  return {
+    printableDirectory: configuration.printableDirectory,
+    settings: configuration.settings,
+    data: await prepareInput(configuration.sourceDirectory, input),
+    useEntryAssetAlias: configuration.useEntryAssetAlias,
+  };
 }
 
 async function requireDirectory(

@@ -120,6 +120,7 @@ bun dist/bin.js --help
 
 ```text
 print-page <printable-directory> [--output <pdf-path>] [options]
+print-page inspect <printable-directory> [options]
 ```
 
 Options:
@@ -133,8 +134,20 @@ Options:
 - `-f, --force` permits replacement of an existing output PDF and requires `--output`.
 - `-h, --help` shows CLI help; `-v, --version` prints the version.
 
-The former `print-page render <printable-directory>` form remains accepted for
-existing scripts, but new commands can omit `render`.
+The normal PDF command remains commandless. The former
+`print-page render <printable-directory>` form is still accepted for existing
+scripts.
+
+`inspect` prepares the printable with the same settings, presets, input, and
+optional `prepare.js` pipeline as PDF rendering, then starts a temporary
+localhost-only server. It prints a preview URL and stays running until Ctrl+C;
+open that URL in your usual browser for DevTools and manual reloads. It does
+not create a PDF, so `--output` and `--force` are not accepted with `inspect`.
+
+```bash
+bun run dev -- inspect ./examples/label --data '{"productName":"Example Curtain"}'
+# Preview: http://127.0.0.1:43821/index.html
+```
 
 When PDF bytes go to stdout, stdout contains only the PDF. Errors, status
 messages, and other diagnostics are written to stderr.
@@ -209,6 +222,7 @@ src/
   prepare.ts         optional prepare.js execution
   inject.ts          Mustache and window-data injection
   virtual-origin.ts  virtual-origin resource mapping
+  inspect.ts         localhost browser preview server
   render.ts          Playwright renderer and PDF byte flow
   cache.ts           deterministic filesystem cache
   print.ts           future host-printer boundary
