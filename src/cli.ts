@@ -33,15 +33,16 @@ Options:
   --<key>=<value>      Simple string input field; repeat as needed
   -d, --data <json>    Literal JSON input
   -i, --input <path>   JSON input file; use - to read stdin
-  --preset <name>      Load presets/<name>.json from the printable
+  --preset <name>      Load presets/<name>.json over the default preset
   -f, --force          Replace an existing output file (requires --output)
   -h, --help           Show this help
   -v, --version        Show the version
 
-An optional --preset may be combined with one input form: --key=value fields,
---data, or --input. Preset values are the base input and explicit input wins.
-Direct fields are strings; use JSON for typed or nested values. With no input
-option or preset, the printable receives {}.
+When present, presets/default.json is loaded as the base input. An optional
+--preset may be combined with one input form: --key=value fields, --data, or
+--input. Later input overrides earlier values. Direct fields are strings; use
+JSON for typed or nested values. With no input option or preset, the printable
+receives {} unless a default preset is defined.
 
 Example:
   print-page ./label -o ./label.pdf --name="John Doe"
@@ -358,20 +359,20 @@ async function loadInput(
   services: CliServices,
 ): Promise<unknown> {
   const suppliedInput = await loadSuppliedInput(args, services);
+  const defaultPreset = await loadDefaultPreset(printableDirectory, services);
+  let input: unknown = defaultPreset ?? {};
 
-  if (args.presetName === undefined) {
-    return suppliedInput.input;
+  if (args.presetName !== undefined) {
+    const preset = args.presetName === "default" && defaultPreset !== undefined
+      ? defaultPreset
+      : await loadPreset(printableDirectory, args.presetName, services);
+
+    input = mergePresetInput(input, preset);
   }
 
-  const preset = await loadPreset(
-    printableDirectory,
-    args.presetName,
-    services,
-  );
-
   return suppliedInput.wasSupplied
-    ? mergePresetInput(preset, suppliedInput.input)
-    : preset;
+    ? mergePresetInput(input, suppliedInput.input)
+    : input;
 }
 
 interface SuppliedInput {
@@ -434,6 +435,33 @@ async function loadPreset(
   }
 
   return parseJson(source, `preset "${presetName}"`);
+}
+
+async function loadDefaultPreset(
+  printableDirectory: string,
+  services: CliServices,
+): Promise<unknown | undefined> {
+  const defaultPresetPath = resolveWithinDirectory(
+    printableDirectory,
+    "presets/default.json",
+    "Default preset",
+  );
+  let source: string;
+
+  try {
+    source = await services.readInputFile(defaultPresetPath);
+  } catch (error) {
+    if (isMissingPath(error)) {
+      return undefined;
+    }
+
+    throw new Error(
+      `Could not read default preset from ${defaultPresetPath}.`,
+      { cause: error },
+    );
+  }
+
+  return parseJson(source, "default preset");
 }
 
 function mergePresetInput(preset: unknown, suppliedInput: unknown): unknown {

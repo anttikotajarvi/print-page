@@ -28,13 +28,15 @@ package-label/
   index.html
   prepare.js
   presets/
+    default.json
     repair-kit.json
     mounting-parts.json
 ```
 
-`presets/` is optional and requires no setting. `--preset repair-kit` loads
-`package-label/presets/repair-kit.json`; the preset belongs to the printable,
-not to a shared input directory.
+`presets/` is optional and requires no setting. When present,
+`presets/default.json` is loaded automatically as the printable's base input.
+`--preset repair-kit` then loads `package-label/presets/repair-kit.json` on
+top of it. Presets belong to the printable, not to a shared input directory.
 
 Settings are optional. Their current defaults are:
 
@@ -167,16 +169,17 @@ bun run dev -- ./examples/label --data '{"productName":"Example Curtain"}' \
 ### Passing input
 
 Choose at most one explicit input form. An optional `--preset <name>` can be
-combined with direct fields, `--data`, or `--input`. The data flow is:
+combined with direct fields, `--data`, or `--input`. When present, the default
+preset is included automatically. The data flow is:
 
 ```text
-preset data → explicit input overrides → prepare.js → normal rendering pipeline
+default preset → named preset → explicit input overrides → prepare.js → normal rendering pipeline
 ```
 
-When both sources are JSON objects, their top-level fields are merged and
-explicit input wins; nested objects and arrays are replaced rather than merged
-recursively. If either source is not an object, the explicit input replaces the
-preset.
+When adjacent sources are JSON objects, their top-level fields are merged and
+the later source wins; nested objects and arrays are replaced rather than
+merged recursively. If either source is not an object, the later source
+replaces the earlier one.
 `prepare.js` receives only the resulting input, so it does not need to know
 which preset was selected. In the default `mustache` mode, fields become the
 template context (for example, `{{name}}`). With `"injectionMode": "window"`,

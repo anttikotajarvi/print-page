@@ -310,6 +310,82 @@ test("runCli loads a template-local preset", async () => {
   expect(received?.input).toEqual({ name: "Repair kit", quantity: 4 });
 });
 
+test("runCli loads a default preset without --preset", async () => {
+  const printableDirectory = `${fixtures}/minimal`;
+  const defaultPresetPath = join(
+    resolve(printableDirectory),
+    "presets",
+    "default.json",
+  );
+  let received: RenderOptions | undefined;
+  const result = await run([printableDirectory], {
+    ...defaultServices(),
+    readInputFile: async (path) => {
+      expect(path).toBe(defaultPresetPath);
+      return '{"name":"Default kit","quantity":1}';
+    },
+    render: async (options) => {
+      received = options;
+      return pdf;
+    },
+  });
+
+  expect(result.code).toBe(0);
+  expect(received?.input).toEqual({ name: "Default kit", quantity: 1 });
+});
+
+test("runCli loads default presets and shallowly overrides them", async () => {
+  const printableDirectory = `${fixtures}/minimal`;
+  const defaultPresetPath = join(
+    resolve(printableDirectory),
+    "presets",
+    "default.json",
+  );
+  const selectedPresetPath = join(
+    resolve(printableDirectory),
+    "presets",
+    "repair-kit.json",
+  );
+  const requestedPaths: string[] = [];
+  let received: RenderOptions | undefined;
+  const result = await run([
+    printableDirectory,
+    "--preset",
+    "repair-kit",
+    "--data",
+    '{"quantity":2,"added":true}',
+  ], {
+    ...defaultServices(),
+    readInputFile: async (path) => {
+      requestedPaths.push(path);
+
+      if (path === defaultPresetPath) {
+        return '{"name":"Default kit","quantity":1,"keep":"default","settings":{"colour":"red","size":"large"}}';
+      }
+
+      if (path === selectedPresetPath) {
+        return '{"name":"Repair kit","quantity":4,"settings":{"colour":"blue"}}';
+      }
+
+      throw new Error(`Unexpected input path: ${path}`);
+    },
+    render: async (options) => {
+      received = options;
+      return pdf;
+    },
+  });
+
+  expect(result.code).toBe(0);
+  expect(requestedPaths).toEqual([defaultPresetPath, selectedPresetPath]);
+  expect(received?.input).toEqual({
+    name: "Repair kit",
+    quantity: 2,
+    keep: "default",
+    settings: { colour: "blue" },
+    added: true,
+  });
+});
+
 test("runCli applies JSON additions and overrides to a fixture preset", async () => {
   const printableDirectory = `${fixtures}/package-label`;
   let received: RenderOptions | undefined;
@@ -827,16 +903,29 @@ test("runCli sends render failures to stderr without emitting PDF bytes", async 
 function defaultServices(
   overrides: Partial<CliServices> = {},
 ): CliServices {
+  const {
+    readInputFile: overriddenReadInputFile,
+    ...otherOverrides
+  } = overrides;
+  const readInputFile = overriddenReadInputFile ?? (async () => "{}");
+
   return {
     render: async () => pdf,
     startInspectServer: async () => ({
       url: "http://127.0.0.1:43821/index.html",
       close: async () => undefined,
     }),
-    readInputFile: async () => "{}",
+    readInputFile: async (path) => {
+      if (path.endsWith("/presets/default.json")) {
+        const error = Object.assign(new Error("not found"), { code: "ENOENT" });
+        throw error;
+      }
+
+      return readInputFile(path);
+    },
     readStdin: async () => "{}",
     waitForTermination: async () => undefined,
-    ...overrides,
+    ...otherOverrides,
   };
 }
 
