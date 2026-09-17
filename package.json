@@ -27,8 +27,10 @@
     "typecheck": "bunx --bun --no-install tsc --noEmit"
   },
   "dependencies": {
+    "@hyzyla/pdfium": "^2.1.13",
     "mustache": "^4.2.0",
-    "playwright": "^1.62.1"
+    "playwright": "^1.62.1",
+    "sharp": "^0.35.4"
   },
   "devDependencies": {
     "@types/bun": "1.3.14",

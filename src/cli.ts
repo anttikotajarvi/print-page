@@ -6,9 +6,10 @@ import {
   rename,
   rm,
 } from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
+import { dirname, extname, join, parse, resolve } from "node:path";
 
 import { PrintPageError } from "./errors.js";
+import { rasterizePdfToPngs } from "./image.js";
 import {
   startInspectServer,
   type InspectOptions,
@@ -25,11 +26,11 @@ const HELP = `print-page ${VERSION}
 Render HTML-based printables with Chromium.
 
 Usage:
-  print-page <printable-directory> [--output <pdf-path>] [options]
+  print-page <printable-directory> [--output <path>] [options]
   print-page inspect <printable-directory> [options]
 
 Options:
-  -o, --output <path>  Write the PDF to this path
+  -o, --output <path>  Write a PDF, or PNG pages when the path ends in .png
   --<key>=<value>      Simple string input field; repeat as needed
   -d, --data <json>    Literal JSON input
   -i, --input <path>   JSON input file; use - to read stdin
@@ -46,11 +47,12 @@ receives {} unless a default preset is defined.
 
 Example:
   print-page ./label -o ./label.pdf --name="John Doe"
+  print-page ./label -o ./label.png --name="John Doe"
   print-page ./label --name="John Doe" > ./label.pdf
   print-page inspect ./label --name="John Doe"
 
-Without --output, stdout must be redirected or piped. Page size and margins
-are controlled by printable CSS.
+Without --output, PDF bytes must be redirected or piped. PNG output always
+requires --output. Page size and margins are controlled by printable CSS.
 `;
 
 const CLI_OPTIONS = new Set([
@@ -79,6 +81,7 @@ export interface CliWriter {
 
 export interface CliServices {
   render(options: RenderOptions): Promise<Uint8Array>;
+  rasterizePdfToPngs(pdf: Uint8Array): Promise<Uint8Array[]>;
   startInspectServer(options: InspectOptions): Promise<InspectServer>;
   readInputFile(path: string): Promise<string>;
   readStdin(): Promise<string>;
@@ -104,6 +107,7 @@ class CliUsageError extends Error {
 
 const defaultServices: CliServices = {
   render,
+  rasterizePdfToPngs,
   startInspectServer,
   readInputFile: async (path) => Bun.file(path).text(),
   readStdin: async () => new Response(Bun.stdin).text(),
@@ -178,7 +182,9 @@ export async function runCli(
       ? undefined
       : resolve(renderArguments.outputPath);
 
-    if (outputPath !== undefined) {
+    const outputFormat = outputPath === undefined ? "pdf" : formatForOutput(outputPath);
+
+    if (outputPath !== undefined && outputFormat === "pdf") {
       await ensureOutputAvailable(outputPath, renderArguments.force);
     }
 
@@ -189,9 +195,27 @@ export async function runCli(
 
     if (outputPath === undefined) {
       io.stdout.write(pdf);
-    } else {
+    } else if (outputFormat === "pdf") {
       await writeOutput(outputPath, pdf, renderArguments.force);
       io.stderr.write(`Wrote ${outputPath}\n`);
+    } else {
+      const images = await services.rasterizePdfToPngs(pdf);
+      const imagePaths = pngOutputPaths(outputPath, images.length);
+
+      await Promise.all(
+        imagePaths.map((path) => ensureOutputAvailable(path, renderArguments.force)),
+      );
+
+      for (const [index, imagePath] of imagePaths.entries()) {
+        const image = images[index];
+
+        if (image === undefined) {
+          throw new Error("PNG rasterizer returned an incomplete page list.");
+        }
+
+        await writeOutput(imagePath, image, renderArguments.force);
+        io.stderr.write(`Wrote ${imagePath}\n`);
+      }
     }
 
     return 0;
@@ -581,7 +605,7 @@ async function ensureOutputAvailable(
 
 async function writeOutput(
   path: string,
-  pdf: Uint8Array,
+  output: Uint8Array,
   force: boolean,
 ): Promise<void> {
   let temporaryDirectory: string | undefined;
@@ -590,9 +614,9 @@ async function writeOutput(
     const outputDirectory = dirname(path);
     await mkdir(outputDirectory, { recursive: true });
     temporaryDirectory = await mkdtemp(join(outputDirectory, ".print-page-"));
-    const temporaryPath = join(temporaryDirectory, "output.pdf");
+    const temporaryPath = join(temporaryDirectory, "output");
 
-    await Bun.write(temporaryPath, pdf);
+    await Bun.write(temporaryPath, output);
 
     if (force) {
       await rename(temporaryPath, path);
@@ -619,7 +643,7 @@ async function writeOutput(
 
     throw new PrintPageError(
       "RENDER_FAILED",
-      `Could not write PDF to ${path}.`,
+      `Could not write output to ${path}.`,
       { cause: error },
     );
   } finally {
@@ -629,6 +653,30 @@ async function writeOutput(
       );
     }
   }
+}
+
+function formatForOutput(path: string): "pdf" | "png" {
+  return extname(path).toLowerCase() === ".png" ? "png" : "pdf";
+}
+
+function pngOutputPaths(outputPath: string, pageCount: number): string[] {
+  if (!Number.isSafeInteger(pageCount) || pageCount <= 0) {
+    throw new PrintPageError(
+      "RENDER_FAILED",
+      "PNG rasterizer did not return any pages.",
+    );
+  }
+
+  if (pageCount === 1) {
+    return [outputPath];
+  }
+
+  const details = parse(outputPath);
+
+  return Array.from(
+    { length: pageCount },
+    (_, index) => join(details.dir, `${details.name}-${index + 1}${details.ext}`),
+  );
 }
 
 function isMissingPath(error: unknown): error is { code: string } {

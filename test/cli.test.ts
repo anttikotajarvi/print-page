@@ -22,6 +22,16 @@ const fixtures = fileURLToPath(new URL("./fixtures/", import.meta.url));
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 const pdf = encoder.encode("%PDF-1.7\nfake PDF\n");
+const png = new Uint8Array([
+  0x89,
+  0x50,
+  0x4e,
+  0x47,
+  0x0d,
+  0x0a,
+  0x1a,
+  0x0a,
+]);
 const temporaryDirectories: string[] = [];
 
 afterEach(async () => {
@@ -102,7 +112,7 @@ test("runCli shows help for the default command and accepts the legacy alias", a
 
   expect(result.code).toBe(0);
   expect(text(result.stdout)).toMatch(/print-page <printable-directory>/u);
-  expect(text(result.stdout)).toMatch(/\[--output <pdf-path>\]/u);
+  expect(text(result.stdout)).toMatch(/\[--output <path>\]/u);
   expect(text(result.stdout)).toMatch(/--<key>=<value>/u);
   expect(text(result.stdout)).toMatch(/--preset <name>/u);
   expect(text(result.stdout)).toMatch(/--name="John Doe"/u);
@@ -211,6 +221,93 @@ test("runCli writes PDF bytes to --output and keeps stdout empty", async () => {
     printableDirectory: resolve(`${fixtures}/minimal`),
     input: { name: "Ada" },
   });
+});
+
+test("runCli writes a single PNG to the requested output path", async () => {
+  const directory = await temporaryDirectory();
+  const outputPath = join(directory, "card.png");
+  let rasterized: Uint8Array | undefined;
+  const result = await run([
+    `${fixtures}/minimal`,
+    "--output",
+    outputPath,
+  ], defaultServices({
+    rasterizePdfToPngs: async (receivedPdf) => {
+      rasterized = receivedPdf;
+      return [png];
+    },
+  }));
+
+  expect(result.code).toBe(0);
+  expect(result.stdout).toEqual(new Uint8Array());
+  expect(result.stderr).toBe(`Wrote ${outputPath}\n`);
+  expect(rasterized).toEqual(pdf);
+  expect(await readFile(outputPath)).toEqual(Buffer.from(png));
+});
+
+test("runCli writes numbered PNG files for a multi-page render", async () => {
+  const directory = await temporaryDirectory();
+  const outputPath = join(directory, "card.png");
+  const firstPath = join(directory, "card-1.png");
+  const secondPath = join(directory, "card-2.png");
+  const secondPng = new Uint8Array([...png, 2]);
+  const result = await run([
+    `${fixtures}/minimal`,
+    "--output",
+    outputPath,
+  ], defaultServices({
+    rasterizePdfToPngs: async () => [png, secondPng],
+  }));
+
+  expect(result.code).toBe(0);
+  expect(result.stdout).toEqual(new Uint8Array());
+  expect(result.stderr).toBe(`Wrote ${firstPath}\nWrote ${secondPath}\n`);
+  expect(await Bun.file(outputPath).exists()).toBe(false);
+  expect(await readFile(firstPath)).toEqual(Buffer.from(png));
+  expect(await readFile(secondPath)).toEqual(Buffer.from(secondPng));
+});
+
+test("runCli checks every generated PNG path before writing", async () => {
+  const directory = await temporaryDirectory();
+  const outputPath = join(directory, "card.png");
+  const firstPath = join(directory, "card-1.png");
+  const secondPath = join(directory, "card-2.png");
+  await writeFile(secondPath, "existing page");
+
+  const result = await run([
+    `${fixtures}/minimal`,
+    "--output",
+    outputPath,
+  ], defaultServices({
+    rasterizePdfToPngs: async () => [png, png],
+  }));
+
+  expect(result.code).toBe(1);
+  expect(result.stderr).toMatch(/already exists; use --force/u);
+  expect(await Bun.file(firstPath).exists()).toBe(false);
+  expect(await readFile(secondPath, "utf8")).toBe("existing page");
+});
+
+test("runCli replaces generated PNG paths when forced", async () => {
+  const directory = await temporaryDirectory();
+  const outputPath = join(directory, "card.png");
+  const firstPath = join(directory, "card-1.png");
+  const secondPath = join(directory, "card-2.png");
+  await writeFile(firstPath, "old first page");
+  await writeFile(secondPath, "old second page");
+
+  const result = await run([
+    `${fixtures}/minimal`,
+    "--output",
+    outputPath,
+    "--force",
+  ], defaultServices({
+    rasterizePdfToPngs: async () => [png, png],
+  }));
+
+  expect(result.code).toBe(0);
+  expect(await readFile(firstPath)).toEqual(Buffer.from(png));
+  expect(await readFile(secondPath)).toEqual(Buffer.from(png));
 });
 
 test("runCli parses direct string input fields", async () => {
@@ -905,12 +1002,15 @@ function defaultServices(
 ): CliServices {
   const {
     readInputFile: overriddenReadInputFile,
+    rasterizePdfToPngs: overriddenRasterizePdfToPngs,
     ...otherOverrides
   } = overrides;
   const readInputFile = overriddenReadInputFile ?? (async () => "{}");
+  const rasterizePdfToPngs = overriddenRasterizePdfToPngs ?? (async () => [png]);
 
   return {
     render: async () => pdf,
+    rasterizePdfToPngs,
     startInspectServer: async () => ({
       url: "http://127.0.0.1:43821/index.html",
       close: async () => undefined,

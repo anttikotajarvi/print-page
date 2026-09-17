@@ -1,14 +1,14 @@
 # print-page
 
-`print-page` is a small TypeScript CLI for turning HTML-based printables into PDFs with Chromium. A printable can be plain HTML, a Mustache template, or the compiled output of a browser application.
+`print-page` is a small TypeScript CLI for turning HTML-based printables into PDFs or print-accurate PNGs with Chromium. A printable can be plain HTML, a Mustache template, or the compiled output of a browser application.
 
 The complete preliminary design is in [`handoff.md`](./handoff.md).
 
 ## Project status
 
-Rendering is implemented. The CLI loads settings and optional preparation code, renders through Chromium using a virtual local origin, returns PDF bytes, and reuses deterministic output from the local cache when enabled. It can write those bytes to a file or directly to redirected stdout.
+Rendering is implemented. The CLI loads settings and optional preparation code, renders through Chromium using a virtual local origin, returns PDF bytes, and reuses deterministic output from the local cache when enabled. It can write the PDF to a file or redirected stdout, or rasterize its pages as PNGs.
 
-Host printer integration is intentionally not implemented yet; this CLI produces PDFs only.
+Host printer integration is intentionally not implemented yet; this CLI produces PDF or PNG files only.
 
 The package is marked private until those interfaces and a public license are finalized.
 
@@ -121,14 +121,16 @@ bun dist/bin.js --help
 ## CLI
 
 ```text
-print-page <printable-directory> [--output <pdf-path>] [options]
+print-page <printable-directory> [--output <path>] [options]
 print-page inspect <printable-directory> [options]
 ```
 
 Options:
 
-- `-o, --output <path>` writes the PDF to a file. The file is not replaced unless `--force` is provided.
-- Without `--output`, the PDF is written as raw bytes to stdout. Stdout must be redirected or piped; print-page refuses to write binary PDF data to an interactive terminal.
+- `-o, --output <path>` writes a PDF by default. A path ending in `.png` writes PNG output instead. Existing output files are not replaced unless `--force` is provided.
+- A one-page PNG is written to the requested path. A multi-page PNG render uses the requested path as a base name: `label.png` becomes `label-1.png`, `label-2.png`, and so on.
+- PNG pages are rasterized from the generated PDF at 300 DPI, preserving the printable's CSS page size, margins, orientation, and pagination. The PNG metadata also records 300 DPI.
+- Without `--output`, the PDF is written as raw bytes to stdout. Stdout must be redirected or piped; print-page refuses to write binary PDF data to an interactive terminal. PNG output requires `--output`.
 - `--key=value` supplies a simple string input field; repeat it for each field.
 - `-d, --data <json>` supplies literal JSON.
 - `-i, --input <path>` reads JSON from a file; use `-` for stdin.
@@ -157,6 +159,11 @@ messages, and other diagnostics are written to stderr.
 ```bash
 # Write a file.
 bun run dev -- ./examples/label --output ./label.pdf \
+  --data '{"productName":"Example Curtain"}'
+
+# Write a print-accurate 300-DPI PNG. Multi-page printables write
+# label-1.png, label-2.png, and so on.
+bun run dev -- ./examples/label --output ./label.png \
   --data '{"productName":"Example Curtain"}'
 
 # Stream directly to a file or printer.

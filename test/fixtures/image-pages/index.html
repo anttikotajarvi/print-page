@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <style>
+      @page {
+        size: 50mm 30mm;
+        margin: 0;
+      }
+
+      body {
+        margin: 0;
+      }
+
+      .page {
+        box-sizing: border-box;
+        width: 50mm;
+        height: 30mm;
+      }
+
+      .page + .page {
+        break-before: page;
+      }
+
+      .first {
+        background: blue;
+      }
+
+      .second {
+        background: red;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="page first"></main>
+    <main class="page second"></main>
+  </body>
+</html>
