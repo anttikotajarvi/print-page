@@ -35,8 +35,10 @@ package-label/
 
 `presets/` is optional and requires no setting. When present,
 `presets/default.json` is loaded automatically as the printable's base input.
-`--preset repair-kit` then loads `package-label/presets/repair-kit.json` on
-top of it. Presets belong to the printable, not to a shared input directory.
+`package-label#repair-kit` (or `--preset repair-kit`) then loads
+`package-label/presets/repair-kit.json` on top of it. Presets belong to the
+printable, not to a shared input directory. In a printable argument, the first
+`#` starts the preset selector.
 
 Settings are optional. Their current defaults are:
 
@@ -121,8 +123,8 @@ bun dist/bin.js --help
 ## CLI
 
 ```text
-print-page <printable-directory> [--output <path>] [options]
-print-page inspect <printable-directory> [options]
+print-page <printable-directory[#preset]> [--output <path>] [options]
+print-page inspect <printable-directory[#preset]> [options]
 ```
 
 Options:
@@ -134,7 +136,8 @@ Options:
 - `--key=value` supplies a simple string input field; repeat it for each field.
 - `-d, --data <json>` supplies literal JSON.
 - `-i, --input <path>` reads JSON from a file; use `-` for stdin.
-- `--preset <name>` loads `presets/<name>.json` from the printable.
+- `<printable-directory>#<preset>` loads `presets/<preset>.json` from the printable.
+- `--preset <name>` provides the same preset selection in option form.
 - `-f, --force` permits replacement of an existing output PDF and requires `--output`.
 - `-h, --help` shows CLI help; `-v, --version` prints the version.
 
@@ -175,9 +178,10 @@ bun run dev -- ./examples/label --data '{"productName":"Example Curtain"}' \
 
 ### Passing input
 
-Choose at most one explicit input form. An optional `--preset <name>` can be
-combined with direct fields, `--data`, or `--input`. When present, the default
-preset is included automatically. The data flow is:
+Choose at most one explicit input form. Select a named preset with either
+`<printable-directory>#<preset>` or `--preset <name>`, then combine it with
+direct fields, `--data`, or `--input`. Do not use both preset selectors.
+When present, the default preset is included automatically. The data flow is:
 
 ```text
 default preset → named preset → explicit input overrides → prepare.js → normal rendering pipeline
@@ -202,8 +206,8 @@ bun run dev -- ./examples/label -o ./label.pdf \
   --data '{"productName":"Example Curtain","copies":2}'
 
 # Use a printable-local preset, then override selected values.
-bun run dev -- ./examples/package-label -o ./label.pdf \
-  --preset repair-kit --data '{"copies":2}'
+bun run dev -- ./examples/package-label#repair-kit -o ./label.pdf \
+  --data '{"copies":2}'
 
 # JSON from stdin.
 printf '%s\n' '{"productName":"Example Curtain"}' \

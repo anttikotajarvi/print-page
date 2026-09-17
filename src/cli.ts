@@ -26,8 +26,8 @@ const HELP = `print-page ${VERSION}
 Render HTML-based printables with Chromium.
 
 Usage:
-  print-page <printable-directory> [--output <path>] [options]
-  print-page inspect <printable-directory> [options]
+  print-page <printable-directory[#preset]> [--output <path>] [options]
+  print-page inspect <printable-directory[#preset]> [options]
 
 Options:
   -o, --output <path>  Write a PDF, or PNG pages when the path ends in .png
@@ -44,6 +44,9 @@ When present, presets/default.json is loaded as the base input. An optional
 --input. Later input overrides earlier values. Direct fields are strings; use
 JSON for typed or nested values. With no input option or preset, the printable
 receives {} unless a default preset is defined.
+
+Select a named preset with <printable-directory>#<preset> or --preset <name>,
+but not both.
 
 Example:
   print-page ./label -o ./label.pdf --name="John Doe"
@@ -96,6 +99,11 @@ interface RenderArguments {
   presetName?: string;
   directInput?: Record<string, string>;
   force: boolean;
+}
+
+interface PrintableReference {
+  printableDirectory: string;
+  presetName?: string;
 }
 
 class CliUsageError extends Error {
@@ -244,6 +252,7 @@ function parseRenderArguments(args: readonly string[]): RenderArguments {
   let data: string | undefined;
   let inputPath: string | undefined;
   let presetName: string | undefined;
+  let printablePresetName: string | undefined;
   const directInput = new Map<string, string>();
   let force = false;
 
@@ -342,12 +351,21 @@ function parseRenderArguments(args: readonly string[]): RenderArguments {
           throw new CliUsageError("print-page accepts exactly one printable directory.");
         }
 
-        printableDirectory = argument;
+        const printableReference = parsePrintableReference(argument);
+        printableDirectory = printableReference.printableDirectory;
+        printablePresetName = printableReference.presetName;
+        break;
     }
   }
 
   if (printableDirectory === undefined) {
     throw new CliUsageError("print-page requires a printable directory.");
+  }
+
+  if (presetName !== undefined && printablePresetName !== undefined) {
+    throw new CliUsageError(
+      "Choose a preset with either <printable-directory>#<preset> or --preset, not both.",
+    );
   }
 
   if (force && outputPath === undefined) {
@@ -364,12 +382,16 @@ function parseRenderArguments(args: readonly string[]): RenderArguments {
     );
   }
 
+  const selectedPresetName = printablePresetName ?? presetName;
+
   return {
     printableDirectory,
     ...(outputPath === undefined ? {} : { outputPath }),
     ...(data === undefined ? {} : { data }),
     ...(inputPath === undefined ? {} : { inputPath }),
-    ...(presetName === undefined ? {} : { presetName }),
+    ...(selectedPresetName === undefined
+      ? {}
+      : { presetName: selectedPresetName }),
     ...(directInput.size === 0
       ? {}
       : { directInput: Object.fromEntries(directInput) }),
@@ -505,6 +527,29 @@ function isPresetName(value: string): boolean {
     && value !== "."
     && value !== ".."
     && !/[\\/\0]/u.test(value);
+}
+
+function parsePrintableReference(value: string): PrintableReference {
+  const presetSeparator = value.indexOf("#");
+
+  if (presetSeparator === -1) {
+    return { printableDirectory: value };
+  }
+
+  const printableDirectory = value.slice(0, presetSeparator);
+  const presetName = value.slice(presetSeparator + 1);
+
+  if (printableDirectory.length === 0) {
+    throw new CliUsageError("A printable directory must precede #preset.");
+  }
+
+  if (!isPresetName(presetName)) {
+    throw new CliUsageError(
+      "#preset requires a non-empty name without path separators.",
+    );
+  }
+
+  return { printableDirectory, presetName };
 }
 
 function parseJson(source: string, label: string): unknown {

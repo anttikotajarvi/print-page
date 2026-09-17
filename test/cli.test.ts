@@ -111,12 +111,14 @@ test("runCli shows help for the default command and accepts the legacy alias", a
   const legacyResult = await run(["render", "--help"]);
 
   expect(result.code).toBe(0);
-  expect(text(result.stdout)).toMatch(/print-page <printable-directory>/u);
+  expect(text(result.stdout)).toMatch(/print-page <printable-directory\[#preset\]>/u);
   expect(text(result.stdout)).toMatch(/\[--output <path>\]/u);
   expect(text(result.stdout)).toMatch(/--<key>=<value>/u);
   expect(text(result.stdout)).toMatch(/--preset <name>/u);
   expect(text(result.stdout)).toMatch(/--name="John Doe"/u);
-  expect(text(result.stdout)).toMatch(/print-page inspect <printable-directory>/u);
+  expect(text(result.stdout)).toMatch(
+    /print-page inspect <printable-directory\[#preset\]>/u,
+  );
   expect(result.stderr).toBe("");
   expect(legacyResult).toEqual(result);
 });
@@ -407,6 +409,90 @@ test("runCli loads a template-local preset", async () => {
   expect(received?.input).toEqual({ name: "Repair kit", quantity: 4 });
 });
 
+test("runCli selects a template-local preset from the printable reference", async () => {
+  const printableDirectory = `${fixtures}/minimal`;
+  const presetPath = join(
+    resolve(printableDirectory),
+    "presets",
+    "repair-kit.json",
+  );
+  const requestedPaths: string[] = [];
+  let received: RenderOptions | undefined;
+  const result = await run([
+    `${printableDirectory}#repair-kit`,
+    "--data",
+    '{"quantity":2}',
+  ], defaultServices({
+    readInputFile: async (path) => {
+      requestedPaths.push(path);
+      return '{"name":"Repair kit","quantity":4}';
+    },
+    render: async (options) => {
+      received = options;
+      return pdf;
+    },
+  }));
+
+  expect(result.code).toBe(0);
+  expect(requestedPaths).toEqual([presetPath]);
+  expect(received).toEqual({
+    printableDirectory: resolve(printableDirectory),
+    input: { name: "Repair kit", quantity: 2 },
+  });
+});
+
+test("runCli selects a printable-reference preset for inspect", async () => {
+  const printableDirectory = `${fixtures}/minimal`;
+  let received: { printableDirectory: string; input: unknown } | undefined;
+  const result = await run([
+    "inspect",
+    `${printableDirectory}#repair-kit`,
+  ], defaultServices({
+    readInputFile: async () => '{"name":"Repair kit","quantity":4}',
+    startInspectServer: async (options) => {
+      received = options;
+      return {
+        url: "http://127.0.0.1:43821/index.html",
+        close: async () => undefined,
+      };
+    },
+  }));
+
+  expect(result.code).toBe(0);
+  expect(received).toEqual({
+    printableDirectory: resolve(printableDirectory),
+    input: { name: "Repair kit", quantity: 4 },
+  });
+});
+
+test("runCli reuses the default preset selected from the printable reference", async () => {
+  const printableDirectory = `${fixtures}/minimal`;
+  const defaultPresetPath = join(
+    resolve(printableDirectory),
+    "presets",
+    "default.json",
+  );
+  const requestedPaths: string[] = [];
+  let received: RenderOptions | undefined;
+  const result = await run([
+    `${printableDirectory}#default`,
+  ], {
+    ...defaultServices(),
+    readInputFile: async (path) => {
+      requestedPaths.push(path);
+      return '{"name":"Default kit","quantity":1}';
+    },
+    render: async (options) => {
+      received = options;
+      return pdf;
+    },
+  });
+
+  expect(result.code).toBe(0);
+  expect(requestedPaths).toEqual([defaultPresetPath]);
+  expect(received?.input).toEqual({ name: "Default kit", quantity: 1 });
+});
+
 test("runCli loads a default preset without --preset", async () => {
   const printableDirectory = `${fixtures}/minimal`;
   const defaultPresetPath = join(
@@ -682,6 +768,61 @@ test("runCli rejects unsafe template-local preset names", async () => {
     expect(readCount).toBe(0);
     expect(renderCount).toBe(0);
   }
+});
+
+test("runCli rejects invalid or conflicting printable-reference presets", async () => {
+  const printableDirectory = `${fixtures}/minimal`;
+  const invalidReferences = [
+    "#repair-kit",
+    `${printableDirectory}#`,
+    `${printableDirectory}#.`,
+    `${printableDirectory}#..`,
+    `${printableDirectory}#repair/kit`,
+    `${printableDirectory}#repair\\kit`,
+    `${printableDirectory}#repair\u0000kit`,
+  ];
+
+  for (const reference of invalidReferences) {
+    let readCount = 0;
+    let renderCount = 0;
+    const result = await run([reference], defaultServices({
+      readInputFile: async () => {
+        readCount += 1;
+        return "{}";
+      },
+      render: async () => {
+        renderCount += 1;
+        return pdf;
+      },
+    }));
+
+    expect(result.code).toBe(2);
+    expect(result.stderr).toMatch(/preset|printable directory/u);
+    expect(readCount).toBe(0);
+    expect(renderCount).toBe(0);
+  }
+
+  let readCount = 0;
+  let renderCount = 0;
+  const result = await run([
+    `${printableDirectory}#repair-kit`,
+    "--preset",
+    "repair-kit",
+  ], defaultServices({
+    readInputFile: async () => {
+      readCount += 1;
+      return "{}";
+    },
+    render: async () => {
+      renderCount += 1;
+      return pdf;
+    },
+  }));
+
+  expect(result.code).toBe(2);
+  expect(result.stderr).toMatch(/either .*#.*--preset.*not both/u);
+  expect(readCount).toBe(0);
+  expect(renderCount).toBe(0);
 });
 
 test("runCli reports missing, duplicate, unreadable, and invalid presets", async () => {
