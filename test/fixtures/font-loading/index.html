@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="en">
+  <body>
+    <div id="state">pending</div>
+    <script>
+      window.addEventListener("load", () => {
+        const face = new FontFace("LateFont", "url(font.woff2)");
+        document.fonts.add(face);
+        face.load().then(() => {
+          document.getElementById("state").textContent = "loaded";
+        });
+      });
+    </script>
+  </body>
+</html>

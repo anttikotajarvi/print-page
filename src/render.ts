@@ -164,6 +164,13 @@ export class PlaywrightPdfRenderer implements PdfRenderer {
           );
         }
 
+        // Fonts requested during or after `load` (e.g. via FontFace.load())
+        // must finish before the PDF snapshot, or text renders in a fallback.
+        await Promise.race([
+          page.evaluate(() => document.fonts.ready.then(() => undefined)),
+          rejectAfter(remainingTime(deadline)),
+        ]);
+
         await page.emulateMedia({ media: "print" });
 
         return new Uint8Array(await page.pdf({
@@ -326,6 +333,15 @@ function remainingTime(deadline: number): number {
   }
 
   return remaining;
+}
+
+function rejectAfter(milliseconds: number): Promise<never> {
+  return new Promise((_, reject) => {
+    setTimeout(
+      () => reject(new PrintPageError("RENDER_FAILED", "Printable render timed out.")),
+      milliseconds,
+    ).unref();
+  });
 }
 
 function describeError(error: unknown): string {
